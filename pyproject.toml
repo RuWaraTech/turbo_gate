@@ -1,0 +1,49 @@
+[project]
+name = "gateway_service"
+dynamic = ["version"]
+description = ""
+authors = [
+    {name = "Farai Wande",email = "faraiwande@gmail.com"}
+]
+
+[tool.poetry]
+version = "0.0.0" 
+
+[tool.poetry.dependencies]
+python = "^3.12"
+flask = "^3.1.1"
+
+
+[tool.poetry.group.dev.dependencies]
+commitizen = "^4.8.3"
+
+[tool.commitizen]
+name = "cz_customize"
+tag_format = "v$version"
+version_scheme = "semver2"
+version = "0.0.0"  # Keep in sync with tool.poetry.version
+version_files = [
+    "pyproject.toml:version",  # Update the [tool.poetry] version
+    "clutch_control/__init__.py:__version__"  # If you have a __version__ in your package
+]
+
+update_changelog_on_bump = true
+
+[tool.commitizen.customize]
+schema_pattern = "^(build|bump|docs|feat|fix|refactor|chore):(\\s.*)"
+changelog_pattern = "^(build|docs|feat|fix|refactor|chore):(\\s.*)"
+commit_parser = "^(?P<change_type>build|bump|docs|feat|fix|refactor|chore):\\s(?P<message>.*)?"
+change_type_order = ["feat", "build", "fix", "refactor", "chore", "docs"]
+
+[tool.commitizen.customize.bump_map]
+feat = "MINOR"
+build = "PATCH"
+docs = "PATCH"
+fix = "PATCH"
+refactor = "PATCH"
+chore = "PATCH"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
