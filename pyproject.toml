@@ -21,7 +21,7 @@ commitizen = "^4.8.3"
 name = "cz_customize"
 tag_format = "v$version"
 version_scheme = "semver2"
-version = "0.0.3"  # Keep in sync with tool.poetry.version
+version = "0.0.0"  # Keep in sync with tool.poetry.version
 version_files = [
     "pyproject.toml:version",  # Update the [tool.poetry] version
     "clutch_control/__init__.py:__version__"  # If you have a __version__ in your package
