@@ -102,9 +102,17 @@ class ProductionConfig(Config):
     TESTING = False
     LOG_LEVEL = 'INFO'
     
+class TestingConfig(Config):
+    """Testing configuration."""
+    DEBUG = True
+    TEST = True
+    REDIS_ENABLED = False
+    LOG_LEVEL = 'DEBUG'
+    
 # Configuration mapping
 config = {
     'dev': DevelopmentConfig,
+    'test': TestingConfig,
     'prod': ProductionConfig,
     'default': DevelopmentConfig
 }
