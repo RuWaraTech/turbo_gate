@@ -16,7 +16,7 @@ class Config:
     
     # Flask settings
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-    DEBUG = os.environ.get('FLASK_ENV') == 'development'
+    DEBUG = os.environ.get('FLASK_ENV') == 'dev'
     TESTING = False
     
     # Redis settings
@@ -99,7 +99,7 @@ class DevelopmentConfig(Config):
 class ProductionConfig(Config):
     """Production configuration."""
     DEBUG = False
-    TESTING = False
+    TEST = False
     LOG_LEVEL = 'INFO'
     
 class TestingConfig(Config):
