@@ -6,9 +6,9 @@ from gateway_service.app import create_app
 
 def main():
     """Run development server."""
-    os.environ.setdefault('FLASK_ENV', 'development')
+    os.environ.setdefault('FLASK_ENV', 'dev')
     
-    app = create_app('development')
+    app = create_app('dev')
     
     # Get port from environment
     port = int(os.environ.get('PORT', 5000))
