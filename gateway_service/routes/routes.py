@@ -46,6 +46,7 @@ def create_routes() -> Blueprint:
                 'status': 'healthy',
                 'version': __version__,
                 'redis': redis_status,
+                'env' : current_app.config.get('FLASK_ENV'),
                 'timestamp': time.time()
             }
     
