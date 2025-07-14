@@ -3,7 +3,7 @@ import time
 import click
 from flask import Flask, g
 from flask_cors import CORS
-
+from typing import Optional
 from gateway_service.flask_config import config
 from gateway_service.routes import create_routes
 from gateway_service.utils import setup_logging
