@@ -1,0 +1,55 @@
+services:
+  # Redis for caching and sessions
+  redis:
+    image: redis:7-alpine
+    container_name: turbogate-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: dev_redis_password_123
+    command: >
+      redis-server
+      --requirepass dev_redis_password_123
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    networks:
+      - turbogate-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # TurboGate API Gateway
+  turbogate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prod
+    container_name: turbogate-gateway
+    restart: unless-stopped
+    environment:
+      - FLASK_ENV=prod
+      - SECRET_KEY=dev_gateway_secret_key_12345
+      - REDIS_URL=redis://:dev_redis_password_123@redis:6379/0
+      - LOG_LEVEL=DEBUG
+      - CORS_ORIGINS=http://localhost:3000
+    volumes:
+      - .:/app
+    ports:
+      - "5000:5000"
+    networks:
+      - turbogate-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  turbogate-network:
+    driver: bridge

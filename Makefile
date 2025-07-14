@@ -1,0 +1,90 @@
+
+.PHONY: install run test clean build docker-build docker-run lint format
+
+# Variables
+APP_NAME = turbogate
+PYTHON = python3
+
+# Install dependencies
+install:
+	poetry install
+
+# Install development dependencies
+install-dev:
+	poetry install --with dev,test
+
+# Run development server
+run:
+	poetry run python -m scripts.run_dev
+
+# Run with Poetry script
+dev:
+	poetry run dev-server
+
+# Run tests
+test:
+	poetry run pytest tests/ -v
+
+# Run tests with coverage
+test-coverage:
+	poetry run pytest tests/ --cov=gateway_service --cov-report=html
+
+# Lint code
+lint:
+	poetry run flake8 gateway_service/ tests/
+	poetry run mypy gateway_service/
+
+# Format code
+format:
+	poetry run black gateway_service/ tests/ scripts/
+	poetry run isort gateway_service/ tests/ scripts/
+
+# Clean up
+clean:
+	find . -type d -name __pycache__ -delete
+	find . -type f -name "*.pyc" -delete
+	rm -rf .pytest_cache/
+	rm -rf htmlcov/
+	rm -rf build/
+	rm -rf dist/
+	rm -rf *.egg-info/
+
+# Build package
+build:
+	poetry build
+
+# Version bump
+bump:
+	poetry run cz bump
+
+# Install pre-commit hooks
+pre-commit:
+	poetry run pre-commit install
+
+# Health check
+health:
+	poetry run health-check
+
+# Docker commands
+docker-build:
+	docker build -t $(APP_NAME):latest .
+
+docker-run:
+	docker run -p 5000:5000 --env-file .env $(APP_NAME):latest
+
+# Development with Docker Compose
+dev-up:
+	docker-compose up -d
+
+dev-down:
+	docker-compose down
+
+dev-logs:
+	docker-compose logs -f turbogate
+
+# Production commands
+prod-build:
+	docker build -t $(APP_NAME):prod --target production .
+
+prod-run:
+	docker run -p 5000:5000 -e FLASK_ENV=production $(APP_NAME):prod
