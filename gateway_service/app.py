@@ -20,7 +20,7 @@ def create_app(config_name: Optional[str] = None) -> Flask:
     
     # Load configuration
     if config_name is None:
-        config_name = os.environ.get('FLASK_ENV', 'development')
+        config_name = os.environ.get('FLASK_ENV', 'dev')
     
     app.config.from_object(config.get(config_name, config['default']))
     
@@ -82,7 +82,7 @@ def cli():
 @click.option('--debug', is_flag=True, help='Enable debug mode')
 def run(host: str, port: int, debug: bool):
     """Run the development server."""
-    app = create_app('development' if debug else 'production')
+    app = create_app('dev' if debug else 'prod')
     app.run(host=host, port=port, debug=debug)
 
 
