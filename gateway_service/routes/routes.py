@@ -1,6 +1,7 @@
+import os
 import time 
 from typing import Optional
-from flask import Blueprint, g, current_app, request, jsonify, Response, stream_with_context, g 
+from flask import Blueprint, g, current_app, request, jsonify, Response, stream_with_context
 from flask_restx import Api, Resource, Namespace
 
 import requests
@@ -46,8 +47,10 @@ def create_routes() -> Blueprint:
                 'status': 'healthy',
                 'version': __version__,
                 'redis': redis_status,
-                'env' : current_app.config.get('FLASK_ENV'),
-                'timestamp': time.time()
+                'env' : os.environ.get('FLASK_ENV'),
+                'debug': current_app.debug,
+                'timestamp': time.time(),
+                'uptime': time.time() - getattr(g, 'app_start_time', time.time()),
             }
     
     @gateway_ns.route('/health/services')
