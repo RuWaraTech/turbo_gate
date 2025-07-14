@@ -1,15 +1,16 @@
 """test configuration."""
 
 import pytest
+
 from gateway_service.app import create_app
 
 
 @pytest.fixture
 def app():
     """create test app."""
-    app = create_app('test')
-    app.config['TEST'] = True
-    app.config['REDIS_ENABLED'] = False  # Disable Redis for tests
+    app = create_app("test")
+    app.config["TEST"] = True
+    app.config["REDIS_ENABLED"] = False  # Disable Redis for tests
     return app
 
 
