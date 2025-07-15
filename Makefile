@@ -66,25 +66,25 @@ health:
 	poetry run health-check
 
 # Docker commands
-docker-build:
+docker_build:
 	docker build -t $(APP_NAME):latest .
 
 docker-run:
 	docker run -p 5000:5000 --env-file .env $(APP_NAME):latest
 
 # Development with Docker Compose
-dev-up:
-	docker-compose up -d
+dev_up:
+	docker compose up -d
 
-dev-down:
-	docker-compose down
+dev_down:
+	docker compose down
 
-dev-logs:
-	docker-compose logs -f turbogate
+dev_logs:
+	docker compose logs -f turbogate
 
 # Production commands
-prod-build:
-	docker build -t $(APP_NAME):prod --target production .
+prod_build:
+	docker build -t $(APP_NAME):prod --target prod .
 
-prod-run:
-	docker run -p 5000:5000 -e FLASK_ENV=production $(APP_NAME):prod
+prod_run:
+	docker run -p 5000:5000 -e FLASK_ENV=prod $(APP_NAME):prod
