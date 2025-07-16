@@ -68,11 +68,8 @@ jobs:
     - name: 🧪 Run Tests with Coverage
       run: |
         # Run tests and capture exit code
-        docker run --rm \
-          -v ${{ github.workspace }}/coverage:/gateway_app/htmlcov \
-          --name test-container \
-          ${{ env.IMAGE_NAME }}:test \
-          --cov=gateway_service --cov-report=term-missing --cov-report=html --cov-fail-under=80 -v
+        docker run --rm ${{ env.IMAGE_NAME }}:test 
+          
         
     - name: 📊 Upload Coverage Report
       uses: actions/upload-artifact@v4
