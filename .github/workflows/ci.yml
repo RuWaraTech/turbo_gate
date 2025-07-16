@@ -2,114 +2,227 @@ name: CI - Turbo Gate
 on:
   pull_request:
     branches: [ main ]
+  push:
+    branches: [ "**" ]
 
 env:
   IMAGE_NAME: fwande/turbogate
+  REGISTRY_CACHE_NAME: fwande/turbogate-cache
+  POETRY_VERSION: 1.8.3
 
 jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 🧱 Checkout Code
+      uses: actions/checkout@v4
+    
+    - name: 🔍 Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+    
+    - name: 📤 Upload Trivy scan results to GitHub Security
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
   build:
     runs-on: ubuntu-latest
     outputs:
       duration: ${{ steps.duration.outputs.duration }}
+      status: ${{ job.status }}
 
     steps:
-    - name: 🕒 Start timer
+    - name: 🕒 Start Timer
       id: timer
-      uses: actions/github-script@v6
-      with:
-        script: |
-          core.setOutput('start_time', new Date().getTime())
+      run: echo "start_time=$(date +%s)" >> $GITHUB_OUTPUT
 
     - name: 🧱 Checkout Code
       uses: actions/checkout@v4
 
     - name: 🐳 Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
-
-    - name: 📦 Cache Docker layers
-      uses: actions/cache@v4
+      uses: docker/setup-buildx-action@v3
       with:
-        path: /tmp/.buildx-cache
-        key: ${{ runner.os }}-buildx-${{ github.sha }}
-        restore-keys: |
-          ${{ runner.os }}-buildx-
+        driver-opts: |
+          image=moby/buildkit:v0.12.0
+          network=host
 
-    - name: 🔧 Build Docker Image with Test Target
+    - name: 🔧 Build Test Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: test
+        load: true
+        tags: ${{ env.IMAGE_NAME }}:test
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          POETRY_VERSION=1.8.3
+
+    - name: 🧪 Run Tests with Coverage
       run: |
-        docker build \
-        --target test \
-        -t $IMAGE_NAME:test \
-        .
-
-    - name: 🧪 Run Tests
-      run: |
-        docker run --rm $IMAGE_NAME:test
-
-    - name: 🔧 Build Docker Image with Prod Target
-      run: |
-        docker build \
-        --target prod \
-        -t $IMAGE_NAME:prod \
-        .
-
-    - name: Run Production Container in Background
-      run: |
-        docker run --rm -d -p 5000:5000 --name turbogate_prod $IMAGE_NAME:prod
-
-    - name: Health Check on Prod Container
-      run: |
-        sleep 30
-        curl --retry 3 --retry-delay 5 --fail http://localhost:5000/gateway/health
-
-    - name: Stop Prod Container
+        # Run tests and capture exit code
+        docker run --rm \
+          -v ${{ github.workspace }}/coverage:/gateway_app/htmlcov \
+          --name test-container \
+          ${{ env.IMAGE_NAME }}:test \
+          --cov=gateway_service --cov-report=term-missing --cov-report=html --cov-fail-under=80 -v
+        
+    - name: 📊 Upload Coverage Report
+      uses: actions/upload-artifact@v4
       if: always()
-      run: |
-        docker stop turbogate_prod || true
+      with:
+        name: coverage-report
+        path: coverage/
+        retention-days: 7
 
-    - name: Calculate duration
+    - name: 🔧 Build Production Image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        target: prod
+        load: true
+        tags: ${{ env.IMAGE_NAME }}:prod
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          POETRY_VERSION=1.8.3
+
+    - name: 🏃 Run Production Container and Health Check
+      run: |
+        # Start container with resource limits
+        docker run --rm -d \
+          -p 5000:5000 \
+          --name turbogate_prod \
+          --memory="512m" \
+          --cpus="1" \
+          -e PYTHONUNBUFFERED=1 \
+          ${{ env.IMAGE_NAME }}:prod
+        
+        # Wait for health check to pass (Dockerfile already has HEALTHCHECK)
+        echo "⏳ Waiting for container to be healthy..."
+        timeout 60s bash -c '
+          until [ "$(docker inspect -f {{.State.Health.Status}} turbogate_prod)" == "healthy" ]; do
+            echo "Container health: $(docker inspect -f {{.State.Health.Status}} turbogate_prod)"
+            sleep 2
+          done
+        '
+        
+        # Additional verification with more detailed output
+        echo "✅ Container is healthy, performing additional checks..."
+        curl -v --retry 3 --retry-delay 2 --fail http://localhost:5000/gateway/health
+        
+        # Check container logs for any startup errors
+        echo "📋 Container logs:"
+        docker logs turbogate_prod --tail 20
+
+    - name: 🛑 Stop Production Container
+      if: always()
+      run: docker stop turbogate_prod || true
+
+    - name: ⏱️ Calculate duration
       id: duration
-      uses: actions/github-script@v6
       if: always()
-      with:
-        script: |
-          const start = ${{ steps.timer.outputs.start_time }}
-          const end = new Date().getTime()
-          const duration = ((end - start) / 1000).toFixed(2)
-          core.setOutput('duration', duration)
+      run: |
+        end_time=$(date +%s)
+        duration=$((end_time - ${{ steps.timer.outputs.start_time }}))
+        echo "duration=${duration}" >> $GITHUB_OUTPUT
 
   discord-notify:
-    needs: build
+    needs: [build, security-scan]
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Extract first line of commit message
-        id: commit-msg
+      - name: 📝 Prepare notification data
+        id: prepare
         run: |
-          FIRST_LINE=$(echo "${{ github.event.head_commit.message }}" | head -n 1)
+          # Extract commit info
+          COMMIT_MSG="${{ github.event.head_commit.message || github.event.pull_request.title }}"
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1 | sed 's/"/\\"/g')
           echo "first_line=${FIRST_LINE}" >> $GITHUB_OUTPUT
-
-      - name: Format PR number if applicable
-        id: pr-format
-        run: |
+          
+          # Format PR/Push info
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             echo "pr_text=PR #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
           else
             echo "pr_text=Push" >> $GITHUB_OUTPUT
+            echo "author=${{ github.actor }}" >> $GITHUB_OUTPUT
           fi
-
-      - name: Notify Discord
-        run: |
-          STATUS_EMOJI="${{ needs.build.result == 'success' && '✅' || '❌' }}"
-          STATUS_TEXT="${{ needs.build.result == 'success' && 'Success' || 'Failure' }}"
-          COLOR="${{ needs.build.result == 'success' && '65280' || '16711680' }}"
           
+          # Determine overall status
+          BUILD_RESULT="${{ needs.build.result }}"
+          SECURITY_RESULT="${{ needs.security-scan.result }}"
+          
+          if [ "$BUILD_RESULT" == "success" ] && [ "$SECURITY_RESULT" == "success" ]; then
+            echo "status_emoji=✅" >> $GITHUB_OUTPUT
+            echo "status_text=Success" >> $GITHUB_OUTPUT
+            echo "color=65280" >> $GITHUB_OUTPUT
+          elif [ "$BUILD_RESULT" == "failure" ] || [ "$SECURITY_RESULT" == "failure" ]; then
+            echo "status_emoji=❌" >> $GITHUB_OUTPUT
+            echo "status_text=Failure" >> $GITHUB_OUTPUT
+            echo "color=16711680" >> $GITHUB_OUTPUT
+          elif [ "$BUILD_RESULT" == "cancelled" ] || [ "$SECURITY_RESULT" == "cancelled" ]; then
+            echo "status_emoji=⚠️" >> $GITHUB_OUTPUT
+            echo "status_text=Cancelled" >> $GITHUB_OUTPUT
+            echo "color=16776960" >> $GITHUB_OUTPUT
+          else
+            echo "status_emoji=❓" >> $GITHUB_OUTPUT
+            echo "status_text=Unknown" >> $GITHUB_OUTPUT
+            echo "color=8421504" >> $GITHUB_OUTPUT
+          fi
+          
+          # Individual job statuses
+          echo "build_status=$BUILD_RESULT" >> $GITHUB_OUTPUT
+          echo "security_status=$SECURITY_RESULT" >> $GITHUB_OUTPUT
+
+      - name: 📢 Send Discord Notification
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          # Validate webhook URL exists
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "⚠️ Discord webhook not configured, skipping notification"
+            exit 0
+          fi
+          
+          # Send notification
           curl -H "Content-Type: application/json" \
             -d '{
               "embeds": [{
-                "title": "TurboGate CI '"$STATUS_TEXT"'",
-                "description": "**Status**: '"$STATUS_EMOJI"' '"$STATUS_TEXT"'\n**Repository**: ${{ github.repository }}\n**Branch**: ${{ github.ref_name }}\n**Trigger**: ${{ steps.pr-format.outputs.pr_text }}\n**Commit**: [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\n**Message**: ${{ steps.commit-msg.outputs.first_line }}\n**Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n**Duration**: ${{ needs.build.outputs.duration }} seconds\n**Runner**: ubuntu-latest",
-                "color": '"$COLOR"'
+                "title": "TurboGate CI ${{ steps.prepare.outputs.status_text }}",
+                "description": "**Status**: ${{ steps.prepare.outputs.status_emoji }} ${{ steps.prepare.outputs.status_text }}\n**Repository**: `${{ github.repository }}`\n**Branch**: `${{ github.ref_name }}`\n**Author**: @${{ steps.prepare.outputs.author }}\n**Trigger**: ${{ steps.prepare.outputs.pr_text }}\n**Commit**: [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\n**Message**: ${{ steps.prepare.outputs.first_line }}\n**Workflow**: [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n**Duration**: ${{ needs.build.outputs.duration }}s",
+                "color": ${{ steps.prepare.outputs.color }},
+                "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                "footer": {
+                  "text": "GitHub Actions • ubuntu-latest",
+                  "icon_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                },
+                "fields": [
+                  {
+                    "name": "Build Status",
+                    "value": "${{ steps.prepare.outputs.build_status }}",
+                    "inline": true
+                  },
+                  {
+                    "name": "Security Scan",
+                    "value": "${{ steps.prepare.outputs.security_status }}",
+                    "inline": true
+                  },
+                  {
+                    "name": "Run Number",
+                    "value": "#${{ github.run_number }}",
+                    "inline": true
+                  }
+                ]
               }],
-              "username": "GitHub CI Bot"
+              "username": "GitHub CI Bot",
+              "avatar_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
             }' \
-            "${{ secrets.DISCORD_WEBHOOK }}"
+            "$WEBHOOK_URL"
