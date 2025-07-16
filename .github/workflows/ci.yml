@@ -71,14 +71,6 @@ jobs:
         docker run --rm ${{ env.IMAGE_NAME }}:test 
           
         
-    - name: 📊 Upload Coverage Report
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: coverage-report
-        path: coverage/
-        retention-days: 7
-
     - name: 🔧 Build Production Image
       uses: docker/build-push-action@v5
       with:
