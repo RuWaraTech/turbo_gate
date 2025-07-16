@@ -92,7 +92,7 @@ jobs:
             **Status**: ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failure' }}
             **Repository**: ${{ github.repository }}
             **Branch**: ${{ github.ref_name }}
-            **Trigger**: ${{ github.event_name == 'pull_request' && 'PR #' + github.event.pull_request.number || 'Push' }}
+            **Trigger**: ${{ format('{0}', github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || 'Push') }}
             **Commit**: [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
             **Message**: ${{ format('{0}', github.event.head_commit.message.split('\n')[0]) }}
             **Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
