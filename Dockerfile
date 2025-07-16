@@ -80,43 +80,7 @@ CMD ["poetry", "run", "gunicorn", \
 
 EXPOSE 5000
 
-# Stage 3: Development Stage
-FROM python:3.13-slim AS dev
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PATH=/opt/poetry/bin:$PATH \
-    FLASK_ENV=development \
-    FLASK_DEBUG=1
-
-# Install additional dev tools
-RUN apt-get update \
-    && apt-get install -y git curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy Poetry and all dependencies from base stage
-COPY --from=base /opt/poetry /opt/poetry
-COPY --from=base /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=base /usr/local/bin /usr/local/bin
-
-# Set working directory and copy application
-WORKDIR /gateway_app
-COPY --from=base /gateway_app /gateway_app
-
-# Install development dependencies
-RUN poetry install --no-ansi --no-interaction --with dev
-
-# Use debugpy for remote debugging with hot reload
-CMD ["poetry", "run", "python", "-Xfrozen_modules=off", "-m", "debugpy", \
-     "--listen", "0.0.0.0:5678", \
-     "--wait-for-client", \
-     "-m", "scripts.run_dev"]
-
-EXPOSE 5000
-EXPOSE 5678
-
-# Stage 4: Test Stage
+# Stage 3: Test Stage
 FROM python:3.13-slim AS test
 
 # Set environment variables
