@@ -83,6 +83,21 @@ jobs:
     runs-on: ubuntu-latest
     if: always()
     steps:
+      - name: Extract first line of commit message
+        id: commit-msg
+        run: |
+          FIRST_LINE=$(echo "${{ github.event.head_commit.message }}" | head -n 1)
+          echo "first_line=${FIRST_LINE}" >> $GITHUB_OUTPUT
+
+      - name: Format PR number if applicable
+        id: pr-format
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "pr_text=PR #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          else
+            echo "pr_text=Push" >> $GITHUB_OUTPUT
+          fi
+
       - name: Notify Discord
         uses: Ilshidur/action-discord@master
         with:
@@ -92,9 +107,9 @@ jobs:
             **Status**: ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failure' }}
             **Repository**: ${{ github.repository }}
             **Branch**: ${{ github.ref_name }}
-            **Trigger**: ${{ format('{0}', github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || 'Push') }}
+            **Trigger**: ${{ steps.pr-format.outputs.pr_text }}
             **Commit**: [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
-            **Message**: ${{ format('{0}', github.event.head_commit.message.split('\n')[0]) }}
+            **Message**: ${{ steps.commit-msg.outputs.first_line }}
             **Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           color: ${{ needs.build.result == 'success' && '65280' || '16711680' }}
           username: "GitHub CI Bot"
