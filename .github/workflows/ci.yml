@@ -1,0 +1,40 @@
+name: CI - Turbo Gate
+on:
+  push:
+    # branches: [ main ]
+    branches: ["**"] 
+  pull_request:
+    branches: [ main ]
+
+env:
+  IMAGE_NAME: fwande/turbogate
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 🧱 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: 📦 Cache Docker layers
+      uses: actions/cache@v4
+      with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+    
+    - name: 🔧 Build Docker Image with Test Target
+      run: |
+        docker build \
+        --target test \
+        -t $IMAGE_NAME:test \
+        .
+
+    - name: 🧪 Run Tests
+      run: |
+        docker run --rm $IMAGE_NAME:test
