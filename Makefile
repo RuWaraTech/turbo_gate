@@ -10,7 +10,7 @@ install:
 	poetry install
 
 # Install development dependencies
-install-dev:
+install_dev:
 	poetry install --with dev,test
 
 # Run development server
@@ -26,7 +26,7 @@ test:
 	poetry run pytest tests/ -v
 
 # Run tests with coverage
-test-coverage:
+test_coverage:
 	poetry run pytest tests/ --cov=gateway_service --cov-report=html
 
 # Lint code
@@ -58,7 +58,7 @@ bump:
 	poetry run cz bump
 
 # Install pre-commit hooks
-pre-commit:
+pre_commit:
 	poetry run pre-commit install
 
 # Health check
