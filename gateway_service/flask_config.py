@@ -116,7 +116,7 @@ class DevelopmentConfig(Config):
         if len(secret_key) < 16:
             raise ValueError("SECRET_KEY must be at least 16 characters long for security")
         self.SECRET_KEY = secret_key
-
+    ENVIRONMENT = "dev"
     DEBUG = True
     LOG_LEVEL = "DEBUG"
 
@@ -130,7 +130,7 @@ class ProductionConfig(Config):
         # Additional production-specific validation
         if self.SECRET_KEY == "dev-secret-key-change-in-production":
             raise ValueError("Default SECRET_KEY cannot be used in production")
-
+    ENVIRONMENT = "prod"
     DEBUG = False
     TEST = False
     LOG_LEVEL = "INFO"
@@ -146,7 +146,7 @@ class TestingConfig(Config):
         if len(secret_key) < 16:
             raise ValueError("SECRET_KEY must be at least 16 characters long for security")
         self.SECRET_KEY = secret_key
-
+    ENVIRONMENT = "test"
     DEBUG = True
     TEST = True
     REDIS_ENABLED = False
