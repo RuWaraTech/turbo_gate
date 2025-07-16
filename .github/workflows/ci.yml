@@ -99,10 +99,10 @@ jobs:
           fi
 
       - name: Notify Discord
-        uses: Ilshidur/action-discord@master
+        uses: appleboy/discord-action@v1.2.0
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK }}
-          title: "TurboGate CI: ${{ needs.build.result == 'success' && 'SUCCESS' || 'FAILURE' }}"
+          title: TurboGate CI ${{ needs.build.result == 'success' && 'Success' || 'Failure' }}
           description: |
             **Status**: ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failure' }}
             **Repository**: ${{ github.repository }}
@@ -111,19 +111,7 @@ jobs:
             **Commit**: [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
             **Message**: ${{ steps.commit-msg.outputs.first_line }}
             **Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Duration**: ${{ needs.build.outputs.duration }} seconds
+            **Runner**: ubuntu-latest
           color: ${{ needs.build.result == 'success' && '65280' || '16711680' }}
-          username: "GitHub CI Bot"
-          avatar: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
-          fields: |
-            [
-              {
-                "name": "Duration",
-                "value": "${{ needs.build.outputs.duration }} seconds",
-                "inline": true
-              },
-              {
-                "name": "Runner",
-                "value": "ubuntu-latest",
-                "inline": true
-              }
-            ]
+          username: GitHub CI Bot
