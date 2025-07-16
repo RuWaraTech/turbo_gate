@@ -86,9 +86,9 @@ jobs:
       - name: Notify Discord
         uses: Ilshidur/action-discord@master
         with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK }}
-          title: "TurboGate CI: ${{ needs.build.result == 'success' && 'SUCCESS' || 'FAILURE' }}"
-          description: |
+        webhook: ${{ secrets.DISCORD_WEBHOOK }}
+        title: "TurboGate CI: ${{ needs.build.result == 'success' && 'SUCCESS' || 'FAILURE' }}"
+        description: |
             **Status**: ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failure' }}
             **Repository**: ${{ github.repository }}
             **Branch**: ${{ github.ref_name }}
@@ -96,9 +96,9 @@ jobs:
             **Commit**: [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
             **Message**: ${{ format('{0}', github.event.head_commit.message.split('\n')[0]) }}
             **Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          color: ${{ needs.build.result == 'success' && '65280' || '16711680' }}
-          username: "GitHub CI Bot"
-          avatar: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+        color: ${{ needs.build.result == 'success' && '65280' || '16711680' }}
+        username: "GitHub CI Bot"
+        avatar: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
           fields: |
             [
               {
