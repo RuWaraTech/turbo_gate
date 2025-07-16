@@ -49,42 +49,38 @@ clean:
 	rm -rf dist/
 	rm -rf *.egg-info/
 
-# Build package
-build:
-	poetry build
-
-# Version bump
-bump:
-	poetry run cz bump
-
-# Install pre-commit hooks
-pre_commit:
-	poetry run pre-commit install
-
 # Health check
 health:
 	poetry run health-check
 
-# Docker commands
-docker_build:
-	docker build -t $(APP_NAME):latest .
-
-docker-run:
-	docker run -p 5000:5000 --env-file .env $(APP_NAME):latest
-
 # Development with Docker Compose
-dev_up:
+docker_up:
 	docker compose up -d
 
-dev_down:
-	docker compose down
+docker_down:
+	docker compose down - v --remove-orphans
 
-dev_logs:
+docker_logs:
 	docker compose logs -f turbogate
 
 # Production commands
 prod_build:
-	docker build -t $(APP_NAME):prod --target prod .
+	docker build -t fwande/$(APP_NAME):prod --target prod .
 
 prod_run:
-	docker run -p 5000:5000 -e FLASK_ENV=prod $(APP_NAME):prod
+	docker run -p 5000:5000 -e FLASK_ENV=prod fwande/$(APP_NAME):prod
+
+
+# Test commands
+test_build:
+	docker build -t fwande/$(APP_NAME):test --target test .
+
+test_run:
+	docker run fwande/$(APP_NAME):test
+
+# Dev commands
+dev_build:
+	docker build -t fwande/$(APP_NAME):dev --target dev .
+
+dev_run:
+	docker run fwande/$(APP_NAME):dev
