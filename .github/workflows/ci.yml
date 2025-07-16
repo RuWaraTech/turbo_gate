@@ -100,20 +100,18 @@ jobs:
           fi
 
       - name: Notify Discord
-        uses: appleboy/discord-action@v1.2.0
-        with:
-          webhook_url: ${{ secrets.DISCORD_WEBHOOK }}
-          message: |
-            **TurboGate CI ${{ needs.build.result == 'success' && 'Success' || 'Failure' }}**
-            
-            **Status**: ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failure' }}
-            **Repository**: ${{ github.repository }}
-            **Branch**: ${{ github.ref_name }}
-            **Trigger**: ${{ steps.pr-format.outputs.pr_text }}
-            **Commit**: [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
-            **Message**: ${{ steps.commit-msg.outputs.first_line }}
-            **Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-            **Duration**: ${{ needs.build.outputs.duration }} seconds
-            **Runner**: ubuntu-latest
-          color: ${{ needs.build.result == 'success' && '65280' || '16711680' }}
-          username: GitHub CI Bot
+        run: |
+          STATUS_EMOJI="${{ needs.build.result == 'success' && '✅' || '❌' }}"
+          STATUS_TEXT="${{ needs.build.result == 'success' && 'Success' || 'Failure' }}"
+          COLOR="${{ needs.build.result == 'success' && '65280' || '16711680' }}"
+          
+          curl -H "Content-Type: application/json" \
+            -d '{
+              "embeds": [{
+                "title": "TurboGate CI '"$STATUS_TEXT"'",
+                "description": "**Status**: '"$STATUS_EMOJI"' '"$STATUS_TEXT"'\n**Repository**: ${{ github.repository }}\n**Branch**: ${{ github.ref_name }}\n**Trigger**: ${{ steps.pr-format.outputs.pr_text }}\n**Commit**: [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\n**Message**: ${{ steps.commit-msg.outputs.first_line }}\n**Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n**Duration**: ${{ needs.build.outputs.duration }} seconds\n**Runner**: ubuntu-latest",
+                "color": '"$COLOR"'
+              }],
+              "username": "GitHub CI Bot"
+            }' \
+            "${{ secrets.DISCORD_WEBHOOK }}"
