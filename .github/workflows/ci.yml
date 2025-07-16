@@ -1,0 +1,117 @@
+name: CI - Turbo Gate
+on:
+  push:
+    branches: [main] 
+  pull_request:
+    branches: [ main ]
+
+env:
+  IMAGE_NAME: fwande/turbogate
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      duration: ${{ steps.duration.outputs.duration }}
+
+    steps:
+    - name: 🕒 Start timer
+      id: timer
+      uses: actions/github-script@v6
+      with:
+        script: |
+          core.setOutput('start_time', new Date().getTime())
+
+    - name: 🧱 Checkout Code
+      uses: actions/checkout@v4
+
+    - name: 🐳 Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: 📦 Cache Docker layers
+      uses: actions/cache@v4
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: 🔧 Build Docker Image with Test Target
+      run: |
+        docker build \
+        --target test \
+        -t $IMAGE_NAME:test \
+        .
+
+    - name: 🧪 Run Tests
+      run: |
+        docker run --rm $IMAGE_NAME:test
+
+    - name: 🔧 Build Docker Image with Prod Target
+      run: |
+        docker build \
+        --target prod \
+        -t $IMAGE_NAME:prod \
+        .
+
+    - name: Run Production Container in Background
+      run: |
+        docker run --rm -d -p 5000:5000 --name turbogate_prod $IMAGE_NAME:prod
+
+    - name: Health Check on Prod Container
+      run: |
+        sleep 30
+        curl --retry 3 --retry-delay 5 --fail http://localhost:5000/gateway/health
+
+    - name: Stop Prod Container
+      if: always()
+      run: |
+        docker stop turbogate_prod || true
+
+    - name: Calculate duration
+      id: duration
+      uses: actions/github-script@v6
+      if: always()
+      with:
+        script: |
+          const start = ${{ steps.timer.outputs.start_time }}
+          const end = new Date().getTime()
+          const duration = ((end - start) / 1000).toFixed(2)
+          core.setOutput('duration', duration)
+
+  discord-notify:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Extract first line of commit message
+        id: commit-msg
+        run: |
+          FIRST_LINE=$(echo "${{ github.event.head_commit.message }}" | head -n 1)
+          echo "first_line=${FIRST_LINE}" >> $GITHUB_OUTPUT
+
+      - name: Format PR number if applicable
+        id: pr-format
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "pr_text=PR #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          else
+            echo "pr_text=Push" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Notify Discord
+        run: |
+          STATUS_EMOJI="${{ needs.build.result == 'success' && '✅' || '❌' }}"
+          STATUS_TEXT="${{ needs.build.result == 'success' && 'Success' || 'Failure' }}"
+          COLOR="${{ needs.build.result == 'success' && '65280' || '16711680' }}"
+          
+          curl -H "Content-Type: application/json" \
+            -d '{
+              "embeds": [{
+                "title": "TurboGate CI '"$STATUS_TEXT"'",
+                "description": "**Status**: '"$STATUS_EMOJI"' '"$STATUS_TEXT"'\n**Repository**: ${{ github.repository }}\n**Branch**: ${{ github.ref_name }}\n**Trigger**: ${{ steps.pr-format.outputs.pr_text }}\n**Commit**: [${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\n**Message**: ${{ steps.commit-msg.outputs.first_line }}\n**Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n**Duration**: ${{ needs.build.outputs.duration }} seconds\n**Runner**: ubuntu-latest",
+                "color": '"$COLOR"'
+              }],
+              "username": "GitHub CI Bot"
+            }' \
+            "${{ secrets.DISCORD_WEBHOOK }}"
