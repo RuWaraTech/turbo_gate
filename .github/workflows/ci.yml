@@ -60,6 +60,7 @@ jobs:
 
     - name: Health Check on Prod Container
       run: |
+        sleep 30
         curl --retry 3 --retry-delay 5 --fail http://localhost:5000/gateway/health
 
     - name: Stop Prod Container
@@ -101,9 +102,10 @@ jobs:
       - name: Notify Discord
         uses: appleboy/discord-action@v1.2.0
         with:
-          webhook: ${{ secrets.DISCORD_WEBHOOK }}
-          title: TurboGate CI ${{ needs.build.result == 'success' && 'Success' || 'Failure' }}
-          description: |
+          webhook_url: ${{ secrets.DISCORD_WEBHOOK }}
+          message: |
+            **TurboGate CI ${{ needs.build.result == 'success' && 'Success' || 'Failure' }}**
+            
             **Status**: ${{ needs.build.result == 'success' && '✅ Success' || '❌ Failure' }}
             **Repository**: ${{ github.repository }}
             **Branch**: ${{ github.ref_name }}
