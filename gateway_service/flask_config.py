@@ -16,10 +16,19 @@ class ServiceConfig:
 class Config:
     """Base configuration class."""
 
+    def __init__(self):
+        """Initialize configuration with validation."""
+        # Validate SECRET_KEY
+        secret_key = os.environ.get("SECRET_KEY")
+        if not secret_key:
+            raise ValueError("No SECRET_KEY set for Flask application. Did you follow the setup instructions?")
+        if len(secret_key) < 16:
+            raise ValueError("SECRET_KEY must be at least 16 characters long for security")
+        self.SECRET_KEY = secret_key
+
     # Flask settings
-    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
     DEBUG = os.environ.get("FLASK_ENV") == "dev"
-    TESTING = False
+    TEST = False
 
     # Redis settings
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
@@ -100,12 +109,27 @@ class Config:
 class DevelopmentConfig(Config):
     """Development configuration."""
 
+    def __init__(self):
+        """Initialize development configuration."""
+        # Allow fallback SECRET_KEY for development only
+        secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production")
+        if len(secret_key) < 16:
+            raise ValueError("SECRET_KEY must be at least 16 characters long for security")
+        self.SECRET_KEY = secret_key
+
     DEBUG = True
     LOG_LEVEL = "DEBUG"
 
 
 class ProductionConfig(Config):
     """Production configuration."""
+
+    def __init__(self):
+        """Initialize production configuration with strict validation."""
+        super().__init__()
+        # Additional production-specific validation
+        if self.SECRET_KEY == "dev-secret-key-change-in-production":
+            raise ValueError("Default SECRET_KEY cannot be used in production")
 
     DEBUG = False
     TEST = False
@@ -114,6 +138,14 @@ class ProductionConfig(Config):
 
 class TestingConfig(Config):
     """Testing configuration."""
+
+    def __init__(self):
+        """Initialize testing configuration."""
+        # Use a test-specific SECRET_KEY
+        secret_key = os.environ.get("SECRET_KEY", "test-secret-key-for-testing-only")
+        if len(secret_key) < 16:
+            raise ValueError("SECRET_KEY must be at least 16 characters long for security")
+        self.SECRET_KEY = secret_key
 
     DEBUG = True
     TEST = True

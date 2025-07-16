@@ -24,7 +24,9 @@ def create_app(config_name: Optional[str] = None) -> Flask:
     if config_name is None:
         config_name = os.environ.get("FLASK_ENV", "dev")
 
-    app.config.from_object(config.get(config_name, config["default"]))
+    # Instantiate the config class (since we added __init__ methods)
+    config_class = config.get(config_name, config["default"])
+    app.config.from_object(config_class())
 
     # Initialize extensions
     CORS(app, origins=app.config.get("CORS_ORIGINS", ["*"]))
