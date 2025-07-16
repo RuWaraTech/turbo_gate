@@ -68,7 +68,7 @@ prod_build:
 	docker build -t fwande/$(APP_NAME):prod --target prod .
 
 prod_run:
-	docker run -p 5000:5000 -e FLASK_ENV=prod fwande/$(APP_NAME):prod
+	docker run -p 5000:5000 --env-file .env fwande/$(APP_NAME):prod
 
 
 # Test commands
