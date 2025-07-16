@@ -71,7 +71,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 CMD ["poetry", "run", "gunicorn", \
      "--bind", "0.0.0.0:5000", \
      "--worker-class", "gevent", \
-     "--workers", "4", \
+     "--workers", "5", \
      "--worker-connections", "1000", \
      "--timeout", "120", \
      "--access-logfile", "-", \
