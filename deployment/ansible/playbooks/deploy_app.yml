@@ -1,0 +1,37 @@
+---
+- name: Deploy TurboGate Application
+  hosts: swarm_managers
+  become: yes
+  
+  vars:
+    app_name: turbogate
+    registry: "{{ docker_registry | default('') }}"
+    image_tag: "{{ lookup('env', 'IMAGE_TAG') | default('latest') }}"
+  
+  tasks:
+    - name: Create app directory
+      file:
+        path: /opt/turbogate
+        state: directory
+        mode: '0755'
+    
+    - name: Copy Docker Compose file
+      template:
+        src: docker-compose.prod.yml.j2
+        dest: /opt/turbogate/docker-compose.yml
+    
+    - name: Create secrets
+      docker_secret:
+        name: "{{ item.name }}"
+        data: "{{ item.value }}"
+        state: present
+      loop:
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
+        - { name: "redis_password", value: "{{ redis_password }}" }
+    
+    - name: Deploy stack
+      docker_stack:
+        name: "{{ app_name }}"
+        compose:
+          - /opt/turbogate/docker-compose.yml
+        state: present
