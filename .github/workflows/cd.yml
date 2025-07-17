@@ -5,7 +5,7 @@ on:
     workflows: ["CI - Turbo Gate"]
     types:
       - completed
-    branches: [AGS_0003_Infrastructure]
+    branches: [main]
   
   workflow_dispatch:
     inputs:
