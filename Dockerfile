@@ -37,36 +37,7 @@ COPY scripts /gateway_app/scripts
 # Install the project itself
 RUN poetry install --no-ansi --no-interaction --only-root
 
-
-# Stage 2: Test Stage
-FROM python:3.13-slim AS test
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PATH=/opt/poetry/bin:$PATH
-
-# Copy Poetry and all dependencies from base stage
-COPY --from=base /opt/poetry /opt/poetry
-COPY --from=base /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
-COPY --from=base /usr/local/bin /usr/local/bin
-
-# Set working directory and copy application
-WORKDIR /gateway_app
-COPY --from=base /gateway_app /gateway_app
-
-# Install test dependencies
-RUN poetry install --no-ansi --no-interaction --with test
-
-# Copy test environment file if it exists
-COPY tests /gateway_app/tests
-COPY .env.test* ./
-
-# Set default test command with coverage
-ENTRYPOINT ["poetry", "run", "pytest"]
-CMD ["--cov=gateway_service", "--cov-report=term-missing", "--cov-report=html", "-v"]
-
-# Stage 3: Production Stage
+# Stage 2: Production Stage
 FROM python:3.13-slim AS prod
 
 # Set environment variables
@@ -109,3 +80,30 @@ CMD ["poetry", "run", "gunicorn", \
 
 EXPOSE 5000
 
+# Stage 3: Test Stage
+FROM python:3.13-slim AS test
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH=/opt/poetry/bin:$PATH
+
+# Copy Poetry and all dependencies from base stage
+COPY --from=base /opt/poetry /opt/poetry
+COPY --from=base /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=base /usr/local/bin /usr/local/bin
+
+# Set working directory and copy application
+WORKDIR /gateway_app
+COPY --from=base /gateway_app /gateway_app
+
+# Install test dependencies
+RUN poetry install --no-ansi --no-interaction --with test
+
+# Copy test environment file if it exists
+COPY tests /gateway_app/tests
+COPY .env.test* ./
+
+# Set default test command with coverage
+ENTRYPOINT ["poetry", "run", "pytest"]
+CMD ["--cov=gateway_service", "--cov-report=term-missing", "--cov-report=html", "-v"]
