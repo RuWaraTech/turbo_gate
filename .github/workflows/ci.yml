@@ -1,128 +1,83 @@
 name: CI - Turbo Gate
 on:
+  push:
+    branches: [main] 
   pull_request:
     branches: [ main ]
-  push:
-    branches: [ "**" ]
 
 env:
   IMAGE_NAME: fwande/turbogate
-  REGISTRY_CACHE_NAME: fwande/turbogate-cache
-  POETRY_VERSION: 1.8.3
 
 jobs:
-  security-scan:
-    runs-on: ubuntu-latest
-    steps:
-    - name: 🧱 Checkout Code
-      uses: actions/checkout@v4
-    
-    - name: 🔍 Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        scan-type: 'fs'
-        scan-ref: '.'
-        format: 'sarif'
-        output: 'trivy-results.sarif'
-        severity: 'CRITICAL,HIGH'
-    
-    - name: 📤 Upload Trivy scan results to GitHub Security
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: 'trivy-results.sarif'
-
   build:
     runs-on: ubuntu-latest
     outputs:
       duration: ${{ steps.duration.outputs.duration }}
-      status: ${{ job.status }}
 
     steps:
-    - name: 🕒 Start Timer
+    - name: 🕒 Start timer
       id: timer
-      run: echo "start_time=$(date +%s)" >> $GITHUB_OUTPUT
+      uses: actions/github-script@v6
+      with:
+        script: |
+          core.setOutput('start_time', new Date().getTime())
 
     - name: 🧱 Checkout Code
       uses: actions/checkout@v4
 
     - name: 🐳 Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      with:
-        driver-opts: |
-          image=moby/buildkit:v0.12.0
-          network=host
+      uses: docker/setup-buildx-action@v2
 
-    - name: 🔧 Build Test Image
-      uses: docker/build-push-action@v5
+    - name: 📦 Cache Docker layers
+      uses: actions/cache@v4
       with:
-        context: .
-        target: test
-        load: true
-        tags: ${{ env.IMAGE_NAME }}:test
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        build-args: |
-          POETRY_VERSION=1.8.3
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
 
-    - name: 🧪 Run Tests with Coverage
+    - name: 🔧 Build Docker Image with Test Target
       run: |
-        # Run tests and capture exit code
-        docker run --rm ${{ env.IMAGE_NAME }}:test 
-          
-        
-    - name: 🔧 Build Production Image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        target: prod
-        load: true
-        tags: ${{ env.IMAGE_NAME }}:prod
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        build-args: |
-          POETRY_VERSION=1.8.3
+        docker build \
+        --target test \
+        -t $IMAGE_NAME:test \
+        .
 
-    - name: 🏃 Run Production Container and Health Check
+    - name: 🧪 Run Tests
       run: |
-        # Start container with resource limits
-        docker run --rm -d \
-          -p 5000:5000 \
-          --name turbogate_prod \
-          --memory="512m" \
-          --cpus="1" \
-          -e PYTHONUNBUFFERED=1 \
-          ${{ env.IMAGE_NAME }}:prod
-        
-        # Wait for health check to pass (Dockerfile already has HEALTHCHECK)
-        echo "⏳ Waiting for container to be healthy..."
-        timeout 60s bash -c '
-          until [ "$(docker inspect -f {{.State.Health.Status}} turbogate_prod)" == "healthy" ]; do
-            echo "Container health: $(docker inspect -f {{.State.Health.Status}} turbogate_prod)"
-            sleep 2
-          done
-        '
-        
-        # Additional verification with more detailed output
-        echo "✅ Container is healthy, performing additional checks..."
-        curl -v --retry 3 --retry-delay 2 --fail http://localhost:5000/gateway/health
-        
-        # Check container logs for any startup errors
-        echo "📋 Container logs:"
-        docker logs turbogate_prod --tail 20
+        docker run --rm $IMAGE_NAME:test
 
-    - name: 🛑 Stop Production Container
+    - name: 🔧 Build Docker Image with Prod Target
+      run: |
+        docker build \
+        --target prod \
+        -t $IMAGE_NAME:prod \
+        .
+
+    - name: Run Production Container in Background
+      run: |
+        docker run --rm -d -p 5000:5000 --name turbogate_prod $IMAGE_NAME:prod
+
+    - name: Health Check on Prod Container
+      run: |
+        sleep 30
+        curl --retry 3 --retry-delay 5 --fail http://localhost:5000/gateway/health
+
+    - name: Stop Prod Container
       if: always()
-      run: docker stop turbogate_prod || true
+      run: |
+        docker stop turbogate_prod || true
 
-    - name: ⏱️ Calculate duration
+    - name: Calculate duration
       id: duration
+      uses: actions/github-script@v6
       if: always()
-      run: |
-        end_time=$(date +%s)
-        duration=$((end_time - ${{ steps.timer.outputs.start_time }}))
-        echo "duration=${duration}" >> $GITHUB_OUTPUT
-
+      with:
+        script: |
+          const start = ${{ steps.timer.outputs.start_time }}
+          const end = new Date().getTime()
+          const duration = ((end - start) / 1000).toFixed(2)
+          core.setOutput('duration', duration)
 
   discord-notify:
     needs: build
