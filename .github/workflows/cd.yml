@@ -5,7 +5,7 @@ on:
     workflows: ["CI - Turbo Gate"]
     types:
       - completed
-    branches: [main]
+    branches: ["**"]
   
   workflow_dispatch:
     inputs:
