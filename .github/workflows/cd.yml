@@ -145,23 +145,32 @@ jobs:
       - name: 📦 Configure Terraform Backend
         working-directory: deployment/terraform
         env:
-           AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_S3_ACCESS_KEY }}  # Critical for auth
-           AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
         run: |
-                cat > backend.tf <<EOF
-                terraform {
-                backend "s3" {
-                    bucket   = "${{ secrets.TERRAFORM_STATE_BUCKET }}"  # Your bucket name
-                    key      = "turbogate/${{ github.event.inputs.environment || 'production' }}/terraform.tfstate"
-                    region   = "eu-central-1"  # Hetzner uses AWS-compatible regions
-                    endpoint = "${{ secrets.TF_BACKEND_S3_ENDPOINT }}"  # Hetzner-specific endpoint
-                    skip_credentials_validation = true
-                    skip_region_validation = true
-                    skip_metadata_api_check = true  # Required for Hetzner
-                    }
-                }
-                EOF
-      
+         cat > backend.tf <<EOF
+         terraform {
+         backend "s3" {
+            bucket   = "${{ secrets.TERRAFORM_STATE_BUCKET }}"
+            key      = "turbogate/${{ github.event.inputs.environment || 'production' }}/terraform.tfstate"
+            region   = "eu-central-1"
+            endpoints = { s3 = "${{ secrets.TF_BACKEND_S3_ENDPOINT }}" }
+            skip_credentials_validation = true
+            skip_region_validation      = true
+            skip_metadata_api_check     = true
+            force_path_style            = true
+           }
+          }
+         EOF
+
+
+
+
+
+
+
+
+
       - name: 🏗️ Terraform Init
         working-directory: deployment/terraform
         run: terraform init
