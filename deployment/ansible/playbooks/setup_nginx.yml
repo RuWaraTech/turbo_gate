@@ -1,0 +1,50 @@
+---
+- name: Setup NGINX Reverse Proxy
+  hosts: swarm_managers
+  become: yes
+  
+  tasks:
+    - name: Install NGINX
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+    
+    - name: Install Certbot
+      apt:
+        name: 
+          - certbot
+          - python3-certbot-nginx
+        state: present
+    
+    - name: Copy NGINX configuration
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/sites-available/turbogate
+      notify: restart nginx
+    
+    - name: Enable site
+      file:
+        src: /etc/nginx/sites-available/turbogate
+        dest: /etc/nginx/sites-enabled/turbogate
+        state: link
+    
+    - name: Remove default site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+    
+    - name: Test NGINX configuration
+      command: nginx -t
+    
+    - name: Obtain SSL certificate
+      command: |
+        certbot --nginx -d {{ domain_name }} -d www.{{ domain_name }} \
+        --non-interactive --agree-tos --email {{ admin_email }}
+      when: use_ssl | default(true)
+  
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
