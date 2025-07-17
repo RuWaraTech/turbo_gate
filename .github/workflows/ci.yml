@@ -123,20 +123,21 @@ jobs:
         duration=$((end_time - ${{ steps.timer.outputs.start_time }}))
         echo "duration=${duration}" >> $GITHUB_OUTPUT
 
+
   discord-notify:
-    needs: [build, security-scan]
+    needs: build
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: 📝 Prepare notification data
-        id: prepare
+      - name: Extract commit info
+        id: commit-info
         run: |
-          # Extract commit info
-          COMMIT_MSG="${{ github.event.head_commit.message || github.event.pull_request.title }}"
+          # Handle empty commit message
+          COMMIT_MSG="${{ github.event.head_commit.message || 'No commit message' }}"
           FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1 | sed 's/"/\\"/g')
           echo "first_line=${FIRST_LINE}" >> $GITHUB_OUTPUT
           
-          # Format PR/Push info
+          # Set author based on event type
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             echo "pr_text=PR #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
@@ -144,74 +145,69 @@ jobs:
             echo "pr_text=Push" >> $GITHUB_OUTPUT
             echo "author=${{ github.actor }}" >> $GITHUB_OUTPUT
           fi
-          
-          # Determine overall status
-          BUILD_RESULT="${{ needs.build.result }}"
-          SECURITY_RESULT="${{ needs.security-scan.result }}"
-          
-          if [ "$BUILD_RESULT" == "success" ] && [ "$SECURITY_RESULT" == "success" ]; then
-            echo "status_emoji=✅" >> $GITHUB_OUTPUT
-            echo "status_text=Success" >> $GITHUB_OUTPUT
-            echo "color=65280" >> $GITHUB_OUTPUT
-          elif [ "$BUILD_RESULT" == "failure" ] || [ "$SECURITY_RESULT" == "failure" ]; then
-            echo "status_emoji=❌" >> $GITHUB_OUTPUT
-            echo "status_text=Failure" >> $GITHUB_OUTPUT
-            echo "color=16711680" >> $GITHUB_OUTPUT
-          elif [ "$BUILD_RESULT" == "cancelled" ] || [ "$SECURITY_RESULT" == "cancelled" ]; then
-            echo "status_emoji=⚠️" >> $GITHUB_OUTPUT
-            echo "status_text=Cancelled" >> $GITHUB_OUTPUT
-            echo "color=16776960" >> $GITHUB_OUTPUT
-          else
-            echo "status_emoji=❓" >> $GITHUB_OUTPUT
-            echo "status_text=Unknown" >> $GITHUB_OUTPUT
-            echo "color=8421504" >> $GITHUB_OUTPUT
-          fi
-          
-          # Individual job statuses
-          echo "build_status=$BUILD_RESULT" >> $GITHUB_OUTPUT
-          echo "security_status=$SECURITY_RESULT" >> $GITHUB_OUTPUT
 
-      - name: 📢 Send Discord Notification
+      - name: Validate and send Discord notification
         env:
           WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          # Validate webhook URL exists
+          # Validate webhook exists
           if [ -z "$WEBHOOK_URL" ]; then
-            echo "⚠️ Discord webhook not configured, skipping notification"
+            echo "⚠️ Discord webhook not configured"
             exit 0
           fi
-          
-          # Send notification
-          curl -H "Content-Type: application/json" \
-            -d '{
-              "embeds": [{
-                "title": "TurboGate CI ${{ steps.prepare.outputs.status_text }}",
-                "description": "**Status**: ${{ steps.prepare.outputs.status_emoji }} ${{ steps.prepare.outputs.status_text }}\n**Repository**: `${{ github.repository }}`\n**Branch**: `${{ github.ref_name }}`\n**Author**: @${{ steps.prepare.outputs.author }}\n**Trigger**: ${{ steps.prepare.outputs.pr_text }}\n**Commit**: [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})\n**Message**: ${{ steps.prepare.outputs.first_line }}\n**Workflow**: [View Run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n**Duration**: ${{ needs.build.outputs.duration }}s",
-                "color": ${{ steps.prepare.outputs.color }},
-                "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-                "footer": {
-                  "text": "GitHub Actions • ubuntu-latest",
-                  "icon_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
-                },
-                "fields": [
-                  {
-                    "name": "Build Status",
-                    "value": "${{ steps.prepare.outputs.build_status }}",
-                    "inline": true
-                  },
-                  {
-                    "name": "Security Scan",
-                    "value": "${{ steps.prepare.outputs.security_status }}",
-                    "inline": true
-                  },
-                  {
-                    "name": "Run Number",
-                    "value": "#${{ github.run_number }}",
-                    "inline": true
-                  }
-                ]
+
+          # Set status variables
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            STATUS_EMOJI="✅"
+            STATUS_TEXT="Success"
+            COLOR="65280" # Green
+          else
+            STATUS_EMOJI="❌"
+            STATUS_TEXT="Failure"
+            COLOR="16711680" # Red
+          fi
+
+          # Create safe JSON payload using jq
+          PAYLOAD=$(jq -n \
+            --arg title "TurboGate CI $STATUS_TEXT" \
+            --arg status "$STATUS_EMOJI $STATUS_TEXT" \
+            --arg repo "${{ github.repository }}" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg author "@${{ steps.commit-info.outputs.author }}" \
+            --arg trigger "${{ steps.commit-info.outputs.pr_text }}" \
+            --arg commit "[${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" \
+            --arg message "${{ steps.commit-info.outputs.first_line }}" \
+            --arg workflow "[${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" \
+            --arg duration "${{ needs.build.outputs.duration }} seconds" \
+            --argjson color "$COLOR" \
+            '{
+              embeds: [{
+                title: $title,
+                description: (
+                  "**Status**: \($status)\n" +
+                  "**Repository**: `\($repo)`\n" +
+                  "**Branch**: `\($branch)`\n" +
+                  "**Author**: \($author)\n" +
+                  "**Trigger**: \($trigger)\n" +
+                  "**Commit**: \($commit)\n" +
+                  "**Message**: \($message)\n" +
+                  "**Workflow**: \($workflow)\n" +
+                  "**Duration**: \($duration)\n" +
+                  "**Runner**: ubuntu-latest"
+                ),
+                color: $color,
+                timestamp: now|strftime("%Y-%m-%dT%H:%M:%SZ"),
+                footer: {
+                  text: "GitHub Actions",
+                  icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                }
               }],
-              "username": "GitHub CI Bot",
-              "avatar_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
-            }' \
-            "$WEBHOOK_URL"
+              username: "GitHub CI Bot",
+              avatar_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+            }')
+
+          # Send with error handling
+          curl -sS -X POST \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "$WEBHOOK_URL" || echo "Failed to send Discord notification"
