@@ -87,12 +87,13 @@ jobs:
       - name: Extract commit info
         id: commit-info
         run: |
-          # Handle empty commit message
-          COMMIT_MSG="${{ github.event.head_commit.message || 'No commit message' }}"
+          # Fallback for commit message
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          COMMIT_MSG="${COMMIT_MSG:-No commit message}"
           FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1 | sed 's/"/\\"/g')
           echo "first_line=${FIRST_LINE}" >> $GITHUB_OUTPUT
           
-          # Set author based on event type
+          # Detect event type
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             echo "pr_text=PR #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
@@ -105,13 +106,13 @@ jobs:
         env:
           WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          # Validate webhook exists
+          # Validate webhook
           if [ -z "$WEBHOOK_URL" ]; then
             echo "⚠️ Discord webhook not configured"
             exit 0
           fi
 
-          # Set status variables
+          # Set build status
           if [ "${{ needs.build.result }}" == "success" ]; then
             STATUS_EMOJI="✅"
             STATUS_TEXT="Success"
@@ -122,18 +123,20 @@ jobs:
             COLOR="16711680" # Red
           fi
 
-          # Create safe JSON payload using jq
+          # Build JSON payload using jq
           PAYLOAD=$(jq -n \
             --arg title "TurboGate CI $STATUS_TEXT" \
             --arg status "$STATUS_EMOJI $STATUS_TEXT" \
             --arg repo "${{ github.repository }}" \
-            --arg branch "${{ github.ref_name }}" \
+            --arg branch "${{ github.ref_name || github.ref }}" \
             --arg author "@${{ steps.commit-info.outputs.author }}" \
             --arg trigger "${{ steps.commit-info.outputs.pr_text }}" \
             --arg commit "[${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" \
             --arg message "${{ steps.commit-info.outputs.first_line }}" \
             --arg workflow "[${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" \
-            --arg duration "${{ needs.build.outputs.duration }} seconds" \
+            --arg duration "${{ needs.build.outputs.duration || 'N/A' }} seconds" \
+            --arg username "${{ github.actor }}" \
+            --arg avatar_url "https://github.com/${{ github.actor }}.png" \
             --argjson color "$COLOR" \
             '{
               embeds: [{
@@ -157,12 +160,12 @@ jobs:
                   icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
                 }
               }],
-              username: "GitHub CI Bot",
-              avatar_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+              username: $username,
+              avatar_url: $avatar_url
             }')
 
-          # Send with error handling
+          # Send to Discord
           curl -sS -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "$WEBHOOK_URL" || echo "Failed to send Discord notification"
+            "$WEBHOOK_URL" || echo "⚠️ Failed to send Discord notification"
