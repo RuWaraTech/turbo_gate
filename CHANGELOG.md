@@ -1,3 +1,46 @@
+## v0.3.0 (2025-07-17)
+
+### feat
+
+- using s3 bucket for storing terraform statefiles
+- add automated deployment triggered by CI success or manual dispatch
+- add production deployment script with Terraform and Ansible
+- configure secure stack with secret management and internal networks
+- configure NGINX as reverse proxy with load balancing and rate limiting
+- define Docker Swarm stack for TurboGate with NGINX, Redis, and secrets
+- add initial Ansible inventory structure for Swarm cluster
+- add Ansible role to set up NGINX reverse proxy with SSL for TurboGate
+- add Ansible playbook to deploy TurboGate stack on Swarm managers
+- add Ansible playbook to automate Docker Swarm cluster setup
+- add Terraform outputs for manager IP, floating IP, and worker node IPs
+- provision Hetzner cloud infrastructure for TurboGate with manager and worker nodes
+- define core infrastructure variables for Hetzner Cloud
+
+### build
+
+- changes the endpoints s3 from versions to CD during deployment
+- changes to  cd pipeline, I need this to run after bump has ran
+- reverting back to main for deployments
+- deply AGS_0003_Infrastructure
+- deploy AGS_0003_Infrastructure branch
+-  I want to see the cd run
+- updated CI to pull user information instead of the bot
+- moving to run on every push
+- updated notification in CI to include Author and also better formating
+- updated notification
+- removed coverage results upload
+- improved CI
+- on pull_request only as running the same on merge to main makes no sense
+
+### refactor
+
+- ensuring that prod is at the end do by default this will be the entry point  when this build with out a target
+
+### chore
+
+- removed file from folder
+- define Terraform backend and provider requirements
+
 ## v0.2.0 (2025-07-16)
 
 ### feat
