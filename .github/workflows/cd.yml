@@ -2,7 +2,7 @@ name: Deploy to Production
 
 on:
   workflow_run:
-    workflows: ["CI - Turbo Gate"]
+    workflows: ["Bump Version and Create Release"]  # Changed from "CI - Turbo Gate"
     types:
       - completed
     branches: [main]
@@ -33,6 +33,7 @@ jobs:
     outputs:
       should_deploy: ${{ steps.check.outputs.should_deploy }}
       image_tag: ${{ steps.tag.outputs.image_tag }}
+      version_tag: ${{ steps.version.outputs.version_tag }}
     
     steps:
       - name: 🔍 Check deployment conditions
@@ -43,11 +44,24 @@ jobs:
             echo "✅ Manual deployment triggered"
           elif [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]]; then
             echo "should_deploy=true" >> $GITHUB_OUTPUT
-            echo "✅ CI passed, proceeding with deployment"
+            echo "✅ Version bump completed, proceeding with deployment"
           else
             echo "should_deploy=false" >> $GITHUB_OUTPUT
-            echo "❌ CI failed, skipping deployment"
+            echo "❌ Version bump failed, skipping deployment"
           fi
+      
+      - name: 🧱 Checkout Code (for version detection)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🏷️ Get latest version tag
+        id: version
+        run: |
+          # Get the latest tag (should be the one just created by the bump workflow)
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "version_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest version tag: $LATEST_TAG"
       
       - name: 🏷️ Determine image tag
         id: tag
@@ -55,8 +69,12 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
           else
-            # Use commit SHA from the CI run
-            echo "image_tag=main-${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+            # Use the version tag from the bump workflow
+            VERSION_TAG="${{ steps.version.outputs.version_tag }}"
+            # Remove 'v' prefix if present for docker tag
+            CLEAN_VERSION=${VERSION_TAG#v}
+            echo "image_tag=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+            echo "Using version tag: $CLEAN_VERSION"
           fi
 
   build-and-push:
@@ -88,6 +106,7 @@ jobs:
             type=ref,event=branch
             type=sha,prefix={{branch}}-
             type=raw,value=${{ needs.pre-deploy-check.outputs.image_tag }}
+            type=raw,value=${{ needs.pre-deploy-check.outputs.version_tag }}
             type=raw,value=latest,enable={{is_default_branch}}
       
       - name: 🔨 Build and push Docker image
@@ -104,6 +123,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.meta.outputs.created }}
             VCS_REF=${{ github.sha }}
+            VERSION=${{ needs.pre-deploy-check.outputs.version_tag }}
 
   deploy-infrastructure:
     needs: [pre-deploy-check, build-and-push]
@@ -125,23 +145,32 @@ jobs:
       - name: 📦 Configure Terraform Backend
         working-directory: deployment/terraform
         env:
-           AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_S3_ACCESS_KEY }}  # Critical for auth
-           AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_S3_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
         run: |
-                cat > backend.tf <<EOF
-                terraform {
-                backend "s3" {
-                    bucket   = "${{ secrets.TERRAFORM_STATE_BUCKET }}"  # Your bucket name
-                    key      = "turbogate/${{ github.event.inputs.environment || 'production' }}/terraform.tfstate"
-                    region   = "eu-central-1"  # Hetzner uses AWS-compatible regions
-                    endpoint = "${{ secrets.TF_BACKEND_S3_ENDPOINT }}"  # Hetzner-specific endpoint
-                    skip_credentials_validation = true
-                    skip_region_validation = true
-                    skip_metadata_api_check = true  # Required for Hetzner
-                    }
-                }
-                EOF
-      
+         cat > backend.tf <<EOF
+         terraform {
+         backend "s3" {
+            bucket   = "${{ secrets.TERRAFORM_STATE_BUCKET }}"
+            key      = "turbogate/${{ github.event.inputs.environment || 'production' }}/terraform.tfstate"
+            region   = "eu-central-1"
+            endpoints = { s3 = "${{ secrets.TF_BACKEND_S3_ENDPOINT }}" }
+            skip_credentials_validation = true
+            skip_region_validation      = true
+            skip_metadata_api_check     = true
+            force_path_style            = true
+           }
+          }
+         EOF
+
+
+
+
+
+
+
+
+
       - name: 🏗️ Terraform Init
         working-directory: deployment/terraform
         run: terraform init
@@ -169,7 +198,7 @@ jobs:
           echo "floating_ip=$(terraform output -raw floating_ip)" >> $GITHUB_OUTPUT
 
   deploy-application:
-    needs: [build-and-push, deploy-infrastructure]
+    needs: [pre-deploy-check, build-and-push, deploy-infrastructure]
     runs-on: ubuntu-latest
     environment: ${{ github.event.inputs.environment || 'production' }}
     
@@ -237,10 +266,11 @@ jobs:
             -e "redis_password=${{ secrets.REDIS_PASSWORD }}" \
             -e "image_tag=${{ needs.pre-deploy-check.outputs.image_tag }}" \
             -e "docker_registry=docker.io" \
-            -e "domain_name=${{ secrets.DOMAIN_NAME }}"
+            -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
+            -e "version=${{ needs.pre-deploy-check.outputs.version_tag }}"
 
   verify-deployment:
-    needs: [deploy-infrastructure, deploy-application]
+    needs: [pre-deploy-check, deploy-infrastructure, deploy-application]
     runs-on: ubuntu-latest
     
     steps:
@@ -341,7 +371,7 @@ jobs:
           
           # Build deployment info
           if [ "${{ steps.status.outputs.status }}" == "success" ]; then
-            DEPLOYMENT_INFO="**URL**: https://${{ secrets.DOMAIN_NAME }}\n**Server IP**: ${{ needs.deploy-infrastructure.outputs.floating_ip || 'N/A' }}"
+            DEPLOYMENT_INFO="**URL**: https://${{ secrets.DOMAIN_NAME }}\n**Server IP**: ${{ needs.deploy-infrastructure.outputs.floating_ip || 'N/A' }}\n**Version**: ${{ needs.pre-deploy-check.outputs.version_tag }}"
           else
             DEPLOYMENT_INFO="**Reason**: Check [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
           fi
@@ -349,12 +379,13 @@ jobs:
           PAYLOAD=$(jq -n \
             --arg title "TurboGate Deployment ${{ steps.status.outputs.status }}" \
             --arg status "${{ steps.status.outputs.emoji }} ${{ steps.status.outputs.status }}" \
-            --arg trigger "${{ github.event_name == 'workflow_dispatch' && 'Manual' || 'Automatic (CI passed)' }}" \
+            --arg trigger "${{ github.event_name == 'workflow_dispatch' && 'Manual' || 'Automatic (Version Bump)' }}" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "[${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" \
             --arg actor "${{ github.actor }}" \
             --arg workflow "[${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" \
             --arg image_tag "${{ needs.pre-deploy-check.outputs.image_tag || 'N/A' }}" \
+            --arg version "${{ needs.pre-deploy-check.outputs.version_tag || 'N/A' }}" \
             --arg deployment_info "$DEPLOYMENT_INFO" \
             --argjson color "${{ steps.status.outputs.color }}" \
             '{
@@ -366,6 +397,7 @@ jobs:
                   "**Branch**: `\($branch)`\n" +
                   "**Commit**: \($commit)\n" +
                   "**Actor**: @\($actor)\n" +
+                  "**Version**: `\($version)`\n" +
                   "**Image Tag**: `\($image_tag)`\n" +
                   "**Workflow**: \($workflow)\n" +
                   "\n\($deployment_info)"
