@@ -173,7 +173,10 @@ jobs:
 
       - name: 🏗️ Terraform Init
         working-directory: deployment/terraform
-        run: terraform init
+        env:
+         AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
+         AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
+        run: terraform init -reconfigure
       
       - name: 🔍 Terraform Plan
         id: plan
