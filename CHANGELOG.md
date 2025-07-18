@@ -1,3 +1,9 @@
+## v0.4.1 (2025-07-18)
+
+### fix
+
+- matching versions of terraform
+
 ## v0.4.0 (2025-07-18)
 
 ### feat
