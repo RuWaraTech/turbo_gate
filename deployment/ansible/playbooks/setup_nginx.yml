@@ -1,3 +1,4 @@
+---
 - name: Setup NGINX Reverse Proxy
   hosts: swarm_managers
   become: yes
@@ -6,9 +7,9 @@
     nginx_user: www-data
     nginx_worker_processes: auto
     nginx_worker_connections: 1024
-    # It's good practice to define these as variables
-    domain_name: {{ domain_name }} # Replace with your actual domain variable
-    admin_email: {{ admin_email }} # Replace with your actual email variable
+
+    domain_name: {{ domain_name }} 
+    admin_email: {{ admin_email }} 
   
   tasks:
     - name: Install NGINX and Certbot
@@ -21,7 +22,7 @@
         update_cache: yes
 
     - name: Ensure NGINX is started and enabled with default config
-      # We need NGINX running for the Certbot --nginx plugin to work.
+     
       systemd:
         name: nginx
         state: started
@@ -33,12 +34,11 @@
       register: ssl_cert
 
     - name: Obtain SSL certificate if it doesn't exist
-      # This command will temporarily modify the running NGINX config to solve the challenge.
+     
       command: |
         certbot --nginx -d {{ domain_name }} -d www.{{ domain_name }} --non-interactive --agree-tos --email {{ admin_email }}
       when: not ssl_cert.stat.exists
-      # Note: The certbot command itself is idempotent and won't get a new cert if one is valid.
-      # The 'when' condition is an extra layer of protection and speed.
+     
 
     - name: Create NGINX directories (idempotent)
       file:
@@ -52,9 +52,9 @@
         - /etc/nginx/sites-enabled
 
     - name: Copy final NGINX configuration
-      # This is now safe because the SSL certs are guaranteed to exist.
+     
       template:
-        src: nginx.conf.j2 # Assuming this is your template file
+        src: nginx.conf.j2 
         dest: /etc/nginx/sites-available/turbogate
         owner: root
         group: root
@@ -75,13 +75,12 @@
       notify: restart nginx
 
     - name: Test final NGINX configuration
-      # This test will now run against the final configuration and should pass.
+      
       command: nginx -t
       changed_when: false
 
     - name: Setup auto-renewal for SSL certificates
-      # Certbot's package usually installs a systemd timer, which is preferred.
-      # This cron job is a good explicit fallback.
+     
       cron:
         name: "Renew Let's Encrypt certificates"
         minute: "0"
