@@ -1,3 +1,9 @@
+## v0.4.6 (2025-07-18)
+
+### fix
+
+-  moving nginx  file under play book folder
+
 ## v0.4.5 (2025-07-18)
 
 ### fix
