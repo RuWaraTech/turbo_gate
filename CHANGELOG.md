@@ -1,3 +1,9 @@
+## v0.4.11 (2025-07-18)
+
+### refactor
+
+- Containerize NGINX within Docker Swarm stack
+
 ## v0.4.10 (2025-07-18)
 
 ### fix
