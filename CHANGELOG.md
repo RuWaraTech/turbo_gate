@@ -1,3 +1,9 @@
+## v0.3.5 (2025-07-18)
+
+### build
+
+- version 1.6.6 & skipping_requesting_account_id
+
 ## v0.3.4 (2025-07-18)
 
 ### build
