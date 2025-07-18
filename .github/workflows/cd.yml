@@ -142,37 +142,6 @@ jobs:
         with:
           terraform_version: 1.6.0
       
-      - name: 📦 Configure Terraform Backend
-        working-directory: deployment/terraform
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
-        run: |
-         cat > backend.tf <<EOF
-         terraform {
-         backend "s3" {
-            bucket   = "${{ secrets.TERRAFORM_STATE_BUCKET }}"
-            key      = "turbogate/${{ github.event.inputs.environment || 'production' }}/terraform.tfstate"
-            region   = "eu-central-1"
-            endpoints = { s3 = "https://turbogate.fsn1.hetzner.cloud" }
-            skip_credentials_validation = true
-            skip_region_validation      = true
-            skip_metadata_api_check     = true
-            use_path_style              = true
-            skip_s3_checksum            = true
-            skip_requesting_account_id  = true
-           }
-          }
-         EOF
-          terraform init -reconfigure
-
-
-
-
-
-
-
-
       - name: 🏗️ Terraform Init
         working-directory: deployment/terraform
         env:
