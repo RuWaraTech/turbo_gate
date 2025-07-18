@@ -1,3 +1,20 @@
+## v0.4.0 (2025-07-18)
+
+### feat
+
+- making the ssh sensitive so it does not get displayed at run time
+
+### fix
+
+-  CCX13 is not recognised & only ccx13 is as a valid server name
+
+### build
+
+- removed terraform backend setup in the CD Pipeline this is not required
+- terraform.lock.hcl file
+- updated .gitignore to exlcude  terraform files like the .tfstate &  .tfvars
+- offloading  terraform state file to hetzner s3 bucket
+
 ## v0.3.5 (2025-07-18)
 
 ### build
