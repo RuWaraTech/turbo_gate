@@ -1,3 +1,9 @@
+## v0.3.3 (2025-07-18)
+
+### build
+
+- removing version & also adding KEY & SECRET to Terrafrom INIT
+
 ## v0.3.2 (2025-07-18)
 
 ### build
