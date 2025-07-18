@@ -3,45 +3,86 @@
   hosts: swarm_managers
   become: yes
   
+  vars:
+    nginx_user: www-data
+    nginx_worker_processes: auto
+    nginx_worker_connections: 1024
+  
   tasks:
-    - name: Install NGINX
+    - name: Install NGINX and Certbot
       apt:
-        name: nginx
-        state: present
-        update_cache: yes
-    
-    - name: Install Certbot
-      apt:
-        name: 
+        name:
+          - nginx
           - certbot
           - python3-certbot-nginx
         state: present
+        update_cache: yes
+    
+    - name: Create NGINX directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/nginx/sites-available
+        - /etc/nginx/sites-enabled
+        - /var/log/nginx
+        - /etc/nginx/ssl
     
     - name: Copy NGINX configuration
       template:
         src: nginx.conf.j2
         dest: /etc/nginx/sites-available/turbogate
+        owner: root
+        group: root
+        mode: '0644'
       notify: restart nginx
     
-    - name: Enable site
+    - name: Remove default NGINX site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+    
+    - name: Enable TurboGate site
       file:
         src: /etc/nginx/sites-available/turbogate
         dest: /etc/nginx/sites-enabled/turbogate
         state: link
     
-    - name: Remove default site
-      file:
-        path: /etc/nginx/sites-enabled/default
-        state: absent
-    
     - name: Test NGINX configuration
       command: nginx -t
+      changed_when: false
+    
+    - name: Start and enable NGINX
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+    
+    - name: Check if SSL certificate exists
+      stat:
+        path: "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem"
+      register: ssl_cert
     
     - name: Obtain SSL certificate
       command: |
-        certbot --nginx -d {{ domain_name }} -d www.{{ domain_name }} \
-        --non-interactive --agree-tos --email {{ admin_email }}
-      when: use_ssl | default(true)
+        certbot certonly --nginx \
+        -d {{ domain_name }} \
+        -d www.{{ domain_name }} \
+        --non-interactive \
+        --agree-tos \
+        --email {{ admin_email }}
+      when: not ssl_cert.stat.exists
+    
+    - name: Setup auto-renewal for SSL certificates
+      cron:
+        name: "Renew Let's Encrypt certificates"
+        minute: "0"
+        hour: "3"
+        weekday: "1"
+        job: "/usr/bin/certbot renew --quiet && systemctl reload nginx"
   
   handlers:
     - name: restart nginx

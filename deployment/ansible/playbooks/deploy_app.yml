@@ -4,34 +4,135 @@
   become: yes
   
   vars:
-    app_name: turbogate
-    registry: "{{ docker_registry | default('') }}"
-    image_tag: "{{ lookup('env', 'IMAGE_TAG') | default('latest') }}"
+    stack_name: turbogate
+    compose_file: /opt/turbogate/docker-compose.yml
   
   tasks:
-    - name: Create app directory
+    - name: Create application directories
       file:
-        path: /opt/turbogate
+        path: "{{ item }}"
         state: directory
+        owner: root
+        group: root
         mode: '0755'
+      loop:
+        - /opt/turbogate
+        - /opt/turbogate/configs
+        - /opt/turbogate/data
     
-    - name: Copy Docker Compose file
-      template:
-        src: docker-compose.prod.yml.j2
-        dest: /opt/turbogate/docker-compose.yml
-    
-    - name: Create secrets
+    - name: Create Docker secrets
       docker_secret:
         name: "{{ item.name }}"
-        data: "{{ item.value }}"
+        data: "{{ item.value | b64encode }}"
         state: present
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
+      no_log: true
     
-    - name: Deploy stack
+    - name: Create Docker network
+      docker_network:
+        name: turbogate_net
+        driver: overlay
+        attachable: yes
+    
+    - name: Create Docker Compose file
+      copy:
+        content: |
+          version: '3.8'
+          
+          services:
+            turbogate:
+              image: {{ docker_registry }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}
+              deploy:
+                replicas: {{ app_replicas | default(2) }}
+                update_config:
+                  parallelism: 1
+                  delay: 10s
+                  order: start-first
+                restart_policy:
+                  condition: on-failure
+                  delay: 5s
+                  max_attempts: 3
+                resources:
+                  limits:
+                    cpus: '0.5'
+                    memory: 512M
+                  reservations:
+                    cpus: '0.25'
+                    memory: 256M
+              environment:
+                - FLASK_ENV=prod
+                - REDIS_URL=redis://redis:6379/0
+                - LOG_LEVEL=INFO
+                - DOMAIN_NAME={{ domain_name }}
+              secrets:
+                - source: turbogate_secret_key
+                  target: SECRET_KEY
+              networks:
+                - turbogate_net
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
+                interval: 30s
+                timeout: 3s
+                retries: 3
+                start_period: 40s
+          
+            redis:
+              image: redis:7-alpine
+              deploy:
+                replicas: 1
+                placement:
+                  constraints: [node.role == manager]
+              command: redis-server --requirepass ${REDIS_PASSWORD}
+              environment:
+                - REDIS_PASSWORD_FILE=/run/secrets/redis_password
+              secrets:
+                - redis_password
+              networks:
+                - turbogate_net
+              volumes:
+                - redis_data:/data
+              healthcheck:
+                test: ["CMD", "redis-cli", "--no-auth-warning", "ping"]
+                interval: 10s
+                timeout: 3s
+                retries: 5
+          
+          volumes:
+            redis_data:
+              driver: local
+          
+          networks:
+            turbogate_net:
+              external: true
+          
+          secrets:
+            turbogate_secret_key:
+              external: true
+            redis_password:
+              external: true
+        dest: "{{ compose_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+    
+    - name: Deploy Docker stack
       docker_stack:
-        name: "{{ app_name }}"
+        name: "{{ stack_name }}"
         compose:
-          - /opt/turbogate/docker-compose.yml
+          - "{{ compose_file }}"
         state: present
+    
+    - name: Wait for services to be ready
+      pause:
+        seconds: 30
+    
+    - name: Check service status
+      command: docker service ls
+      register: service_status
+      changed_when: false
+    
+    - name: Display service status
+      debug:
+        var: service_status.stdout_lines
