@@ -1,3 +1,9 @@
+## v0.3.2 (2025-07-18)
+
+### build
+
+- changes endpoint to endpoinds
+
 ## v0.3.1 (2025-07-18)
 
 ### build
