@@ -1,3 +1,9 @@
+## v0.3.1 (2025-07-18)
+
+### build
+
+-  fixing the endpoint for s3 container
+
 ## v0.3.0 (2025-07-17)
 
 ### feat
