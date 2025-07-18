@@ -1,3 +1,9 @@
+## v0.4.3 (2025-07-18)
+
+### fix
+
+- I was not passing s3 backend to all TF Actions
+
 ## v0.4.2 (2025-07-18)
 
 ## v0.4.1 (2025-07-18)
