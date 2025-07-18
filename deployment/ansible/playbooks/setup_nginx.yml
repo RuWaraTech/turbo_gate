@@ -5,8 +5,8 @@
   
   vars:
     nginx_user: www-data
-    domain_name: {{ domain_name }} 
-    admin_email: {{ admin_email }} 
+    domain_name: "{{ domain_name }}"
+    admin_email: "{{ admin_email }}"
   
   tasks:
     - name: Install NGINX and Certbot
@@ -31,7 +31,7 @@
 
     - name: Obtain SSL certificate if it doesn't exist
       command: |
-        certbot --nginx -d {{ domain_name }} -d www.{{ domain_name }} --non-interactive --agree-tos --email {{ admin_email }}
+        certbot --nginx -d "{{ domain_name }}" -d www."{{ domain_name }}" --non-interactive --agree-tos --email "{{ admin_email }}"
       when: not ssl_cert.stat.exists
 
     - name: Stop and disable the host NGINX service
