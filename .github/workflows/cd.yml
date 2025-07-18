@@ -223,14 +223,14 @@ jobs:
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
-          ansible-playbook -i inventory/production.yml playbooks/setup-swarm.yml
+          ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml
       
       - name: 🔒 Setup NGINX with SSL
         working-directory: deployment/ansible
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
-          ansible-playbook -i inventory/production.yml playbooks/setup-nginx.yml \
+          ansible-playbook -i inventory/production.yml playbooks/setup_nginx.yml \
             -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
             -e "admin_email=${{ secrets.ADMIN_EMAIL }}"
       
@@ -239,7 +239,7 @@ jobs:
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
-          ansible-playbook -i inventory/production.yml playbooks/deploy-app.yml \
+          ansible-playbook -i inventory/production.yml playbooks/deploy_app.yml \
             -e "secret_key=${{ secrets.SECRET_KEY }}" \
             -e "redis_password=${{ secrets.REDIS_PASSWORD }}" \
             -e "image_tag=${{ needs.pre-deploy-check.outputs.image_tag }}" \
