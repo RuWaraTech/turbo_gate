@@ -1,13 +1,10 @@
 ---
-- name: Setup NGINX Reverse Proxy
+- name: Prepare Host for NGINX Container and SSL
   hosts: swarm_managers
   become: yes
   
   vars:
     nginx_user: www-data
-    nginx_worker_processes: auto
-    nginx_worker_connections: 1024
-
     domain_name: {{ domain_name }} 
     admin_email: {{ admin_email }} 
   
@@ -21,8 +18,7 @@
         state: present
         update_cache: yes
 
-    - name: Ensure NGINX is started and enabled with default config
-     
+    - name: Ensure NGINX is started for certificate validation
       systemd:
         name: nginx
         state: started
@@ -34,61 +30,29 @@
       register: ssl_cert
 
     - name: Obtain SSL certificate if it doesn't exist
-     
       command: |
         certbot --nginx -d {{ domain_name }} -d www.{{ domain_name }} --non-interactive --agree-tos --email {{ admin_email }}
       when: not ssl_cert.stat.exists
-     
 
-    - name: Create NGINX directories (idempotent)
+    - name: Stop and disable the host NGINX service
+      systemd:
+        name: nginx
+        state: stopped
+        enabled: no
+      # This is critical to prevent port conflicts with the NGINX container
+
+    - name: Create NGINX directory for container config
       file:
-        path: "{{ item }}"
+        path: /etc/nginx/sites-available
         state: directory
         owner: root
         group: root
         mode: '0755'
-      loop:
-        - /etc/nginx/sites-available
-        - /etc/nginx/sites-enabled
 
-    - name: Copy final NGINX configuration
-     
+    - name: Copy final NGINX configuration for the container to use
       template:
         src: nginx.conf.j2 
         dest: /etc/nginx/sites-available/turbogate
         owner: root
         group: root
         mode: '0644'
-      notify: restart nginx
-
-    - name: Remove default NGINX site if it exists
-      file:
-        path: /etc/nginx/sites-enabled/default
-        state: absent
-      notify: restart nginx
-
-    - name: Enable TurboGate site
-      file:
-        src: /etc/nginx/sites-available/turbogate
-        dest: /etc/nginx/sites-enabled/turbogate
-        state: link
-      notify: restart nginx
-
-    - name: Test final NGINX configuration
-      
-      command: nginx -t
-      changed_when: false
-
-    - name: Setup auto-renewal for SSL certificates
-     
-      cron:
-        name: "Renew Let's Encrypt certificates"
-        minute: "0"
-        hour: "3"
-        job: "/usr/bin/certbot renew --quiet --post-hook 'systemctl reload nginx'"
-
-  handlers:
-    - name: restart nginx
-      systemd:
-        name: nginx
-        state: restarted
