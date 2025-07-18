@@ -1,4 +1,3 @@
----
 - name: Setup NGINX Reverse Proxy
   hosts: swarm_managers
   become: yes
@@ -7,6 +6,9 @@
     nginx_user: www-data
     nginx_worker_processes: auto
     nginx_worker_connections: 1024
+    # It's good practice to define these as variables
+    domain_name: {{ domain_name }} # Replace with your actual domain variable
+    admin_email: {{ admin_email }} # Replace with your actual email variable
   
   tasks:
     - name: Install NGINX and Certbot
@@ -17,8 +19,28 @@
           - python3-certbot-nginx
         state: present
         update_cache: yes
-    
-    - name: Create NGINX directories
+
+    - name: Ensure NGINX is started and enabled with default config
+      # We need NGINX running for the Certbot --nginx plugin to work.
+      systemd:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Check if SSL certificate already exists
+      stat:
+        path: "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem"
+      register: ssl_cert
+
+    - name: Obtain SSL certificate if it doesn't exist
+      # This command will temporarily modify the running NGINX config to solve the challenge.
+      command: |
+        certbot --nginx -d {{ domain_name }} -d www.{{ domain_name }} --non-interactive --agree-tos --email {{ admin_email }}
+      when: not ssl_cert.stat.exists
+      # Note: The certbot command itself is idempotent and won't get a new cert if one is valid.
+      # The 'when' condition is an extra layer of protection and speed.
+
+    - name: Create NGINX directories (idempotent)
       file:
         path: "{{ item }}"
         state: directory
@@ -28,62 +50,44 @@
       loop:
         - /etc/nginx/sites-available
         - /etc/nginx/sites-enabled
-        - /var/log/nginx
-        - /etc/nginx/ssl
-    
-    - name: Copy NGINX configuration
+
+    - name: Copy final NGINX configuration
+      # This is now safe because the SSL certs are guaranteed to exist.
       template:
-        src: nginx.conf.j2
+        src: nginx.conf.j2 # Assuming this is your template file
         dest: /etc/nginx/sites-available/turbogate
         owner: root
         group: root
         mode: '0644'
       notify: restart nginx
-    
-    - name: Remove default NGINX site
+
+    - name: Remove default NGINX site if it exists
       file:
         path: /etc/nginx/sites-enabled/default
         state: absent
-    
+      notify: restart nginx
+
     - name: Enable TurboGate site
       file:
         src: /etc/nginx/sites-available/turbogate
         dest: /etc/nginx/sites-enabled/turbogate
         state: link
-    
-    - name: Test NGINX configuration
+      notify: restart nginx
+
+    - name: Test final NGINX configuration
+      # This test will now run against the final configuration and should pass.
       command: nginx -t
       changed_when: false
-    
-    - name: Start and enable NGINX
-      systemd:
-        name: nginx
-        state: started
-        enabled: yes
-    
-    - name: Check if SSL certificate exists
-      stat:
-        path: "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem"
-      register: ssl_cert
-    
-    - name: Obtain SSL certificate
-      command: |
-        certbot certonly --nginx \
-        -d {{ domain_name }} \
-        -d www.{{ domain_name }} \
-        --non-interactive \
-        --agree-tos \
-        --email {{ admin_email }}
-      when: not ssl_cert.stat.exists
-    
+
     - name: Setup auto-renewal for SSL certificates
+      # Certbot's package usually installs a systemd timer, which is preferred.
+      # This cron job is a good explicit fallback.
       cron:
         name: "Renew Let's Encrypt certificates"
         minute: "0"
         hour: "3"
-        weekday: "1"
-        job: "/usr/bin/certbot renew --quiet && systemctl reload nginx"
-  
+        job: "/usr/bin/certbot renew --quiet --post-hook 'systemctl reload nginx'"
+
   handlers:
     - name: restart nginx
       systemd:
