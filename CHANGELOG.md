@@ -1,3 +1,9 @@
+## v0.4.4 (2025-07-18)
+
+### fix
+
+-  app deployment has the wrong prefix
+
 ## v0.4.3 (2025-07-18)
 
 ### fix
