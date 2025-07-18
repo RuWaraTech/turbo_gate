@@ -7,12 +7,13 @@ variable "hcloud_token" {
 variable "ssh_public_key" {
   description = "SSH public key for server access"
   type        = string
+  sensitive   = true
 }
 
 variable "server_type" {
   description = "Hetzner server type"
   type        = string
-  default     = "CCX13" # Lowest dedicated server - 2 vCPU, 8GB RAM, 80GB NVMe SSD 20TB traffic
+  default     = "ccx13" # Lowest dedicated server - 2 vCPU, 8GB RAM, 80GB NVMe SSD 20TB traffic
 }
 
 variable "location" {
@@ -24,4 +25,6 @@ variable "location" {
 variable "domain_name" {
   description = "Domain name for the application"
   type        = string
+  default     = "turbogate.app"
 }
+
