@@ -147,7 +147,10 @@ jobs:
         env:
          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
-        run: terraform init -reconfigure
+        run: |
+          echo "$AWS_ACCESS_KEY_ID"
+          echo "$AWS_SECRET_ACCESS_KEY"
+          terraform init -reconfigure
       
       - name: 🔍 Terraform Plan
         id: plan
