@@ -162,7 +162,7 @@ jobs:
            }
           }
          EOF
-
+         terraform init -reconfigure
 
 
 
