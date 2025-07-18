@@ -154,11 +154,11 @@ jobs:
             bucket   = "${{ secrets.TERRAFORM_STATE_BUCKET }}"
             key      = "turbogate/${{ github.event.inputs.environment || 'production' }}/terraform.tfstate"
             region   = "eu-central-1"
-            endpoints = { s3 = "${{ secrets.TF_BACKEND_S3_ENDPOINT }}" }
+            endpoint = "https://turbogate-terraform-state.fsn1.hetzner.cloud"
             skip_credentials_validation = true
             skip_region_validation      = true
             skip_metadata_api_check     = true
-            force_path_style            = true
+            use_path_style              = true
            }
           }
          EOF
