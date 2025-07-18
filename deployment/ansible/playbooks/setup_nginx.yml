@@ -1,15 +1,15 @@
 ---
-- name: Setup NGINX Reverse Proxy
+- name: Setup NGINX Reverse Proxy with Let's Encrypt
   hosts: swarm_managers
   become: yes
-  
+
   vars:
-    nginx_user: www-data
-    nginx_worker_processes: auto
-    nginx_worker_connections: 1024
-  
+    domain_name: "ridebase.app"   # Replace with your GoDaddy domain
+    admin_email: "faraiwande@gmail.com"  # Replace with your email
+    app_port: 5000                 # Your backend service port
+
   tasks:
-    - name: Install NGINX and Certbot
+    - name: Install dependencies
       apt:
         name:
           - nginx
@@ -17,75 +17,74 @@
           - python3-certbot-nginx
         state: present
         update_cache: yes
-    
-    - name: Create NGINX directories
+
+    - name: Create required directories
       file:
         path: "{{ item }}"
         state: directory
-        owner: root
-        group: root
+        owner: www-data
+        group: www-data
         mode: '0755'
       loop:
-        - /etc/nginx/sites-available
-        - /etc/nginx/sites-enabled
+        - /var/www/certbot
         - /var/log/nginx
         - /etc/nginx/ssl
-    
-    - name: Copy NGINX configuration
+
+    - name: Deploy initial HTTP config
       template:
         src: nginx.conf.j2
         dest: /etc/nginx/sites-available/turbogate
         owner: root
         group: root
         mode: '0644'
-      notify: restart nginx
-    
-    - name: Remove default NGINX site
-      file:
-        path: /etc/nginx/sites-enabled/default
-        state: absent
-    
-    - name: Enable TurboGate site
+      notify: reload nginx
+
+    - name: Enable site
       file:
         src: /etc/nginx/sites-available/turbogate
         dest: /etc/nginx/sites-enabled/turbogate
         state: link
-    
-    - name: Test NGINX configuration
+
+    - name: Remove default site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Test NGINX config
       command: nginx -t
       changed_when: false
-    
+
     - name: Start and enable NGINX
       systemd:
         name: nginx
         state: started
         enabled: yes
-    
-    - name: Check if SSL certificate exists
+
+    - name: Check for existing SSL certificate
       stat:
         path: "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem"
       register: ssl_cert
-    
-    - name: Obtain SSL certificate
+
+    - name: Obtain SSL certificate (if needed)
       command: |
-        certbot certonly --nginx \
+        certbot certonly --webroot \
+        -w /var/www/certbot \
         -d {{ domain_name }} \
         -d www.{{ domain_name }} \
         --non-interactive \
         --agree-tos \
         --email {{ admin_email }}
       when: not ssl_cert.stat.exists
-    
-    - name: Setup auto-renewal for SSL certificates
+
+    - name: Setup certbot renewal
       cron:
-        name: "Renew Let's Encrypt certificates"
+        name: "Certbot SSL renewal"
         minute: "0"
         hour: "3"
-        weekday: "1"
-        job: "/usr/bin/certbot renew --quiet && systemctl reload nginx"
-  
+        job: "/usr/bin/certbot renew --quiet --post-hook \"systemctl reload nginx\""
+
   handlers:
-    - name: restart nginx
+    - name: reload nginx
       systemd:
         name: nginx
-        state: restarted
+        state: reloaded
