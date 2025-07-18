@@ -4,7 +4,6 @@
   become: yes
   
   vars:
-    nginx_user: www-data
     domain_name: "{{ domain_name }}"
     admin_email: "{{ admin_email }}"
   
@@ -18,7 +17,7 @@
         state: present
         update_cache: yes
 
-    - name: Ensure NGINX is started and enabled with default config
+    - name: Ensure NGINX is started for certificate validation
       systemd:
         name: nginx
         state: started
@@ -33,11 +32,15 @@
       command: |
         certbot --nginx -d "{{ domain_name }}" -d www."{{ domain_name }}" --non-interactive --agree-tos --email "{{ admin_email }}"
       when: not ssl_cert.stat.exists
-      # Certbot will now run against the default NGINX config, which will pass.
-      # The --nginx plugin will automatically create a temporary config for the challenge
-      # and then modify the NGINX config to set up SSL.
 
-    - name: Create NGINX directory for final config
+    - name: Stop and disable the host NGINX service
+      systemd:
+        name: nginx
+        state: stopped
+        enabled: no
+
+
+    - name: Create NGINX directory for container config
       file:
         path: /etc/nginx/sites-available
         state: directory
@@ -45,34 +48,10 @@
         group: root
         mode: '0755'
 
-    - name: Copy final NGINX configuration
+    - name: Copy final NGINX configuration for the container to use
       template:
         src: nginx.conf.j2 
         dest: /etc/nginx/sites-available/turbogate
         owner: root
         group: root
         mode: '0644'
-      notify: restart nginx
-
-    - name: Remove default NGINX site if it exists
-      file:
-        path: /etc/nginx/sites-enabled/default
-        state: absent
-      notify: restart nginx
-
-    - name: Enable TurboGate site
-      file:
-        src: /etc/nginx/sites-available/turbogate
-        dest: /etc/nginx/sites-enabled/turbogate
-        state: link
-      notify: restart nginx
-
-    - name: Test final NGINX configuration
-      command: nginx -t
-      changed_when: false
-
-  handlers:
-    - name: restart nginx
-      systemd:
-        name: nginx
-        state: restarted
