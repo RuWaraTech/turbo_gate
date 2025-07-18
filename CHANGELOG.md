@@ -1,3 +1,9 @@
+## v0.4.5 (2025-07-18)
+
+### fix
+
+- refactored ansible files for app deployment
+
 ## v0.4.4 (2025-07-18)
 
 ### fix
