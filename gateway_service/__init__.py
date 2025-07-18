@@ -5,7 +5,7 @@ This package provides a productionAPI Gateway built specifically
 for the Land & House Title Verification platform.
 """
 
-__version__ = "0.4.12"
+__version__ = "0.4.13"
 __author__ = "Farai Wande"
 __email__ = "faraiwande@gmail.com"
 __description__ = "TurboGate - High Performance Flask API Gateway for microservices"
