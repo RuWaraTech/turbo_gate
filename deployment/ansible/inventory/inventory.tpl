@@ -1,6 +1,6 @@
 all:
   children:
-    manager:
+    swarm_managers: # Changed 'manager' to 'swarm_managers' here
       hosts:
         turbogate-manager:
           ansible_host: "${manager_ip}"  # Will be replaced by Terraform output
