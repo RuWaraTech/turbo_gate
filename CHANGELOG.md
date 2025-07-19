@@ -1,3 +1,9 @@
+## v0.7.26 (2025-07-19)
+
+### fix
+
+- moving to enviroments instead of docker secrets
+
 ## v0.7.25 (2025-07-19)
 
 ### fix
