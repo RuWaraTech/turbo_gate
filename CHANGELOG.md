@@ -1,3 +1,9 @@
+## v0.6.14 (2025-07-19)
+
+### fix
+
+- using pip to install netaddr
+
 ## v0.6.13 (2025-07-19)
 
 ### fix
