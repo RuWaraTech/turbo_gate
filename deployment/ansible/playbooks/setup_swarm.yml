@@ -9,7 +9,7 @@
         content: |
           auto eth0:1
           iface eth0:1 inet static
-              address {{ floating_ip }}
+              address "{{ floating_ip }}"
               netmask 32
           
           auto eth0:1
