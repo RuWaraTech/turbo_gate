@@ -1,4 +1,3 @@
-
 - name: Setup Docker Swarm Cluster
   hosts: all
   become: yes
@@ -6,11 +5,18 @@
   tasks:
     # Removed: No longer need to install ifupdown if using netplan
 
-    # Install netaddr for IP operations (still useful for IP calculations if needed)
+    # Install Python netaddr library
+    # Explicitly specify the pip executable to ensure it's installed for the correct Python interpreter
     - name: Install Python netaddr library
       pip:
         name: netaddr
         state: present
+        executable: pip3 # Use pip3, which is commonly linked to Python 3
+      # Add a check for the Python interpreter path if it's not standard
+      # For example, if Ansible is using /usr/bin/python3, you might use:
+      # executable: /usr/bin/python3 -m pip
+      # Or if you know the exact path from the error message:
+      # executable: /opt/hostedtoolcache/Python/3.11.13/x64/bin/python -m pip
 
     # Configure floating IP interface (netplan)
     - name: Configure floating IP interface using Netplan
@@ -38,7 +44,7 @@
           - curl
           - gnupg
           - lsb-release
-          - python3-pip
+          - python3-pip # Ensure python3-pip is installed for the pip module to work
         state: present
         update_cache: yes
 
@@ -75,6 +81,7 @@
           - docker
           - docker-compose
         state: present
+        executable: pip3 # Also ensure these are installed for the correct interpreter
 
     - name: Ensure Docker service is running
       systemd:
