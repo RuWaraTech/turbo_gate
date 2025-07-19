@@ -41,6 +41,7 @@
         name:
           - docker
           - docker-compose
+          - jsondiff
         state: present
     
     - name: Ensure Docker service is running
