@@ -12,8 +12,8 @@ output "worker_ips" {
 
 output "internal_network" {
   value = {
-    manager = hcloud_server.manager.network[0].ip
-    workers = hcloud_server.worker[*].network[0].ip
+    manager = [for net in hcloud_server.manager.network : net.ip][0]
+    workers = [for s in hcloud_server.worker : [for net in s.network : net.ip][0]]
   }
   description = "Internal network IPs"
 }
