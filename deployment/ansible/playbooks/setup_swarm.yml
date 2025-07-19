@@ -95,52 +95,58 @@
       # and not when the worker is already part of swarm and state is 'present'
       # changed_when: false # Uncomment if you don't want this task to report 'changed' on subsequent runs
 
-    - name: Validate swarm status (Manager Node Specific Checks)
+
+
+
+    - name: Validate swarm status on manager node
       block:
-        - name: Get Docker Swarm cluster facts
-          # This gets overall cluster info like ID, JoinTokens
+        - name: Get Docker Swarm cluster-level facts
           community.docker.docker_swarm_info:
           register: cluster_info
           when: "'manager' in group_names"
 
-        - name: Get Docker Swarm node facts
-          # This gets information about all nodes, including the local node's state
+        - name: Get Docker Swarm node-level facts (for all nodes)
           community.docker.docker_swarm_info:
             nodes: true # Crucial: Request node-specific information
           register: node_facts
           when: "'manager' in group_names"
 
-        - name: Debug cluster_info (for overall swarm details)
+        - name: Debug 'cluster_info' (overall swarm details)
           ansible.builtin.debug:
             msg: "{{ cluster_info | to_nice_json }}"
           when: "'manager' in group_names"
 
-        - name: Debug node_facts (for specific node states)
+        - name: Debug 'node_facts' (specific node states)
           ansible.builtin.debug:
             msg: "{{ node_facts | to_nice_json }}"
           when: "'manager' in group_names"
 
-        - name: Find the local manager node's facts
+        - name: Set fact for the local manager node's details
           ansible.builtin.set_fact:
-            local_node: "{{ node_facts.nodes | selectattr('Description.Hostname', 'equalto', ansible_hostname) | first }}"
+            # CORRECTED LINE HERE: 'Description.Hostname' changed to just 'Hostname'
+            local_manager_node: "{{ node_facts.nodes | selectattr('Hostname', 'equalto', ansible_hostname) | first }}"
           when:
             - "'manager' in group_names"
             - node_facts.nodes is defined
-            - node_facts.nodes | length > 0
+            - node_facts.nodes | length > 0 # Ensure there are nodes to select from
 
-        - name: Verify local manager node health
+        - name: Assert local manager node is healthy and leader
           ansible.builtin.assert:
             that:
               # Node Status: 'ready' is the healthy state for a node in the swarm.
-              - local_node.Status.State == "ready"
-              # Manager Status: Ensure it's reachable and explicitly the leader.
-              - local_node.ManagerStatus.Reachability == "reachable"
-              - local_node.ManagerStatus.Leader is defined and local_node.ManagerStatus.Leader is true
-            fail_msg: "Swarm manager node '{{ ansible_hostname }}' is not in a healthy state or is not the leader. Current state: {{ local_node.Status.State }}, Manager Status: {{ local_node.ManagerStatus | default('N/A') }}"
+              - local_manager_node.Status.State == "ready"
+              # Manager Status: Your debug shows 'ManagerStatus: "Leader"' for the manager.
+              # So, we check if ManagerStatus is defined and if it contains "Leader".
+              - local_manager_node.ManagerStatus is defined
+              - local_manager_node.ManagerStatus == "Leader"
+              # Also ensure Reachability is "reachable", if it were a direct key, but it's not present in your debug for manager.
+              # The 'Leader' string itself is the indicator.
+            fail_msg: "Swarm manager node '{{ ansible_hostname }}' is not in a healthy state or is not the leader. Current state: {{ local_manager_node.Status.State | default('N/A') }}, Manager Status: {{ local_manager_node.ManagerStatus | default('N/A') }}"
             success_msg: "Swarm manager node '{{ ansible_hostname }}' is active and healthy."
-          when: "'manager' in group_names and local_node is defined"
+          when: "'manager' in group_names and local_manager_node is defined"
 
-      when: "'manager' in group_names" # This 'when' applies to the entire block
+      when: "'manager' in group_names" # This 'when' applies to the entire validation block
+
 
     - name: Create overlay network
       community.docker.docker_network:
