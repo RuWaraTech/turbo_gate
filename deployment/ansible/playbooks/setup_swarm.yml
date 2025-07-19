@@ -2,48 +2,42 @@
   hosts: all
   become: yes
   vars:
-    ansible_python_interpreter: auto
+    ansible_python_interpreter: /usr/bin/python3
 
   tasks:
-    # Debug Python information first
-    - name: Show Python information
-      debug:
-        msg: |
-          Ansible Python: {{ ansible_python.executable }}
-          Python version: {{ ansible_python.version }}
-          Pip version: {{ ansible_python.version.pip if ansible_python.version.pip is defined else 'Not available' }}
-          System Python3: {{ ansible_facts.python.version if ansible_facts.python is defined else 'Not found' }}
-
-    # Ensure Python3 and pip are available
-    - name: Install Python3 and pip
+    # Ensure Python and pip are properly installed
+    - name: Install Python and pip requirements
       apt:
         name:
           - python3
           - python3-pip
+          - python3-netaddr  # Install system package version if available
         state: present
         update_cache: yes
       when: ansible_os_family == 'Debian'
       register: python_install
+      ignore_errors: yes  # Continue if system package not available
 
     - name: Debug Python installation
       debug:
         var: python_install
 
-    # Install netaddr specifically for Ansible's Python
-    - name: Install netaddr for Ansible
+    # Install netaddr via pip if system package not available
+    - name: Install netaddr via pip
       pip:
         name: netaddr
         state: present
-        executable: "{{ ansible_python.executable }} -m pip"
-      register: netaddr_install
+        executable: pip3
+      when: python_install is failed or python_install.changed
+      register: pip_install
 
-    - name: Debug netaddr installation
+    - name: Debug pip installation
       debug:
-        var: netaddr_install
+        var: pip_install
 
     # Verify netaddr is importable
     - name: Test netaddr import
-      command: "{{ ansible_python.executable }} -c 'import netaddr; print(netaddr.__version__)'"
+      command: "python3 -c 'import netaddr; print(netaddr.__version__)'"
       register: netaddr_test
       changed_when: false
 
@@ -51,7 +45,7 @@
       debug:
         var: netaddr_test
 
-    # Configure floating IP interface (netplan)
+    # Floating IP configuration
     - name: Configure floating IP interface using Netplan
       copy:
         content: |
@@ -69,8 +63,8 @@
       notify: apply netplan configuration
       when: floating_ip is defined
 
-    # Docker installation tasks
-    - name: Install required packages
+    # Docker installation
+    - name: Install Docker prerequisites
       apt:
         name:
           - apt-transport-https
@@ -81,7 +75,7 @@
         state: present
         update_cache: yes
 
-    - name: Create directory for Docker GPG key
+    - name: Create Docker GPG key directory
       file:
         path: /etc/apt/keyrings
         state: directory
@@ -98,7 +92,7 @@
         repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
 
-    - name: Install Docker
+    - name: Install Docker components
       apt:
         name:
           - docker-ce
@@ -108,13 +102,12 @@
         state: present
         update_cache: yes
 
-    - name: Install Docker Python libraries
+    - name: Install Docker Python SDK
       pip:
         name:
           - docker
           - docker-compose
-        state: present
-        executable: "{{ ansible_python.executable }} -m pip"
+        executable: pip3
 
     - name: Ensure Docker service is running
       systemd:
@@ -130,7 +123,7 @@
       when: swarm_role == "manager"
       register: swarm_info
 
-    - name: Get join token for workers
+    - name: Get worker join token
       set_fact:
         worker_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
       when:
