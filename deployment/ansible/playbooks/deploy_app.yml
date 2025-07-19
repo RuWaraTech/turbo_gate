@@ -9,17 +9,17 @@
   
   tasks:
 
-    # - name: Debug received secret_key (for troubleshooting)
-    #   ansible.builtin.debug:
-    #     var: secret_key
-    #   # no_log: true # Keep this for sensitive data!
-    #   when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
+    - name: Debug received secret_key (for troubleshooting)
+      ansible.builtin.debug:
+        var: secret_key
+      no_log: true # Keep this for sensitive data!
+      when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
 
-    # - name: Debug received redis_password (for troubleshooting)
-    #   ansible.builtin.debug:
-    #     var: redis_password
-    #   no_log: true # Keep this for sensitive data!
-    #   when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
+    - name: Debug received redis_password (for troubleshooting)
+      ansible.builtin.debug:
+        var: redis_password
+      no_log: true # Keep this for sensitive data!
+      when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
 
     - name: Create application directories
       file:
@@ -33,7 +33,7 @@
     
     - name: Create Docker network
       docker_network:
-        name: turbogate_net
+        name: turbogate_network
         driver: overlay
         attachable: yes
     
@@ -57,11 +57,11 @@
                   max_attempts: 3
                 resources:
                   limits:
-                    cpus: '0.5'
-                    memory: 512M
+                    cpus: '2.0'
+                    memory: 4G
                   reservations:
-                    cpus: '0.25'
-                    memory: 256M
+                    cpus: '1.0'
+                    memory: 2G
               environment:
                 - FLASK_ENV=prod
                 - REDIS_URL=redis://:{{ redis_password }}@redis:6379/0
@@ -70,7 +70,7 @@
                 - SECRET_KEY={{ secret_key }}
                 - REDIS_PASSWORD={{ redis_password }}
               networks:
-                - turbogate_net
+                - turbogate_networkworkwork
               healthcheck:
                 test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
                 interval: 30s
@@ -120,7 +120,7 @@
               driver: local
 
           networks:
-            turbogate_net:
+            turbogate_network:
               external: true
         dest: "{{ compose_file }}"
         owner: root
