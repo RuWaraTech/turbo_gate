@@ -225,6 +225,7 @@ jobs:
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
           ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml
+          -e "floating_ip=${{ needs.deploy-infrastructure.outputs.floating_ip }}" 
       
       - name: 🔒 Setup NGINX with SSL
         working-directory: deployment/ansible
@@ -248,7 +249,7 @@ jobs:
             -e "docker_registry=docker.io" \
             -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
             -e "version=${{ needs.pre-deploy-check.outputs.version_tag }}" \
-            -e "floating_ip=${{ needs.deploy-infrastructure.outputs.floating_ip }}" 
+            
 
   verify-deployment:
     needs: [pre-deploy-check, deploy-infrastructure, deploy-application]
