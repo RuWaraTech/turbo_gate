@@ -31,26 +31,23 @@
     - name: Install required Python packages
       ansible.builtin.pip:
         name:
-          - docker # The 'docker' Python SDK for the Docker modules
-          - docker-compose # For docker-compose CLI, if you use it later (not strictly for swarm)
-          - jsondiff # Not typically required for Docker modules, but kept if you need it elsewhere
+          - docker
+          - docker-compose
+          - jsondiff
         state: present
 
     - name: Configure non-root Docker access
       ansible.builtin.user:
-        name: "{{ ansible_user | default('ubuntu') }}" # Assumes ubuntu as default if ansible_user is not defined
+        name: "{{ ansible_user | default('ubuntu') }}"
         groups: docker
         append: yes
-      # To apply this, you might need to log out and back in,
-      # or run 'newgrp docker' on the target host. For Ansible,
-      # it usually applies on the next SSH connection.
 
     - name: Initialize Docker Swarm on manager
       community.docker.docker_swarm:
         state: present
         advertise_addr: "{{ swarm_advertise_addr }}"
         listen_addr: "{{ swarm_listen_addr }}"
-        force: yes # Use with caution: forces recreation if swarm already exists
+        force: yes
       when: "'manager' in group_names"
       register: swarm_init
       retries: 3
@@ -60,87 +57,58 @@
       ansible.builtin.set_fact:
         docker_worker_token: "{{ swarm_init.swarm_facts.JoinTokens.Worker }}"
         docker_manager_token: "{{ swarm_init.swarm_facts.JoinTokens.Manager }}"
-      when:
+      when: 
         - "'manager' in group_names"
         - swarm_init.swarm_facts is defined
-        - swarm_init.changed # Only set if swarm_init actually changed something (i.e., created a new swarm)
-      no_log: true # Prevents token exposure in logs
+      no_log: true  # Prevents token exposure in logs
 
-    # Manager readiness check for workers to ensure manager's swarm port is open
-    - name: Verify manager readiness for workers to join
+    - name: Verify manager readiness
       ansible.builtin.wait_for:
-        host: "{{ hostvars[groups['manager'][0]]['internal_ip'] }}" # Target the manager's IP
+        host: "{{ swarm_advertise_addr }}"
         port: 2377
         state: started
         delay: 5
-        timeout: 120
-      when: "'workers' in group_names" # This task runs on workers, waiting for the manager
-      delegate_to: localhost # Run from control node if you want to ensure it's connecting to manager
+        timeout: 120  # Increased timeout for cloud environments
+      when: "'workers' in group_names"
 
     - name: Join workers to swarm
       community.docker.docker_swarm:
         state: join
         advertise_addr: "{{ swarm_advertise_addr }}"
-        join_token: "{{ hostvars[groups['manager'][0]]['docker_worker_token'] }}" # Correctly access token from manager's hostvars
+        join_token: "{{ hostvars[groups['manager'][0]['docker_worker_token'] }}"
         remote_addrs:
-          - "{{ hostvars[groups['manager'][0]]['internal_ip'] }}:2377"
-      when:
+          - "{{ hostvars[groups['manager'][0]['internal_ip'] }}:2377"
+      when: 
         - "'workers' in group_names"
-        - hostvars[groups['manager'][0]]['docker_worker_token'] is defined # Ensure token is available
+        - hostvars[groups['manager'][0]]['docker_worker_token'] is defined
       retries: "{{ join_retries }}"
       delay: "{{ join_retry_delay }}"
       register: join_result
       until: join_result is succeeded
-      # Adding a 'changed_when: false' if you only care about successful join
-      # and not when the worker is already part of swarm and state is 'present'
-      # changed_when: false # Uncomment if you don't want this task to report 'changed' on subsequent runs
 
-    - name: Validate swarm status (Manager Node Specific Checks)
+    - name: Validate swarm status
       block:
-        - name: Get Docker Swarm cluster facts
-          # This gets overall cluster info like ID, JoinTokens
+        - name: Get swarm facts
           community.docker.docker_swarm_info:
-          register: cluster_info
+          register: swarm_facts
           when: "'manager' in group_names"
 
-        - name: Get Docker Swarm node facts
-          # This gets information about all nodes, including the local node's state
-          community.docker.docker_swarm_info:
-            nodes: true # Crucial: Request node-specific information
-          register: node_facts
-          when: "'manager' in group_names"
-
-        - name: Debug cluster_info (for overall swarm details)
+        - name: Debug swarm_facts
           ansible.builtin.debug:
-            msg: "{{ cluster_info | to_nice_json }}"
-          when: "'manager' in group_names"
+            var: swarm_facts
+            # Or to see the full structure:
+            # msg: "{{ swarm_facts | to_nice_json }}"
+          when: "'manager' in group_names" # Only debug on managers
 
-        - name: Debug node_facts (for specific node states)
-          ansible.builtin.debug:
-            msg: "{{ node_facts | to_nice_json }}"
-          when: "'manager' in group_names"
-
-        - name: Find the local manager node's facts
-          ansible.builtin.set_fact:
-            local_node: "{{ node_facts.nodes | selectattr('Description.Hostname', 'equalto', ansible_hostname) | first }}"
-          when:
-            - "'manager' in group_names"
-            - node_facts.nodes is defined
-            - node_facts.nodes | length > 0
-
-        - name: Verify local manager node health
+        - name: Verify swarm health
           ansible.builtin.assert:
             that:
-              # Node Status: 'ready' is the healthy state for a node in the swarm.
-              - local_node.Status.State == "ready"
-              # Manager Status: Ensure it's reachable and explicitly the leader.
-              - local_node.ManagerStatus.Reachability == "reachable"
-              - local_node.ManagerStatus.Leader is defined and local_node.ManagerStatus.Leader is true
-            fail_msg: "Swarm manager node '{{ ansible_hostname }}' is not in a healthy state or is not the leader. Current state: {{ local_node.Status.State }}, Manager Status: {{ local_node.ManagerStatus | default('N/A') }}"
-            success_msg: "Swarm manager node '{{ ansible_hostname }}' is active and healthy."
-          when: "'manager' in group_names and local_node is defined"
-
-      when: "'manager' in group_names" # This 'when' applies to the entire block
+              - swarm_facts.swarm.LocalNodeState == "active"
+              - "'Leader' in swarm_facts.swarm.ManagerStatus|default('')"
+            fail_msg: "Swarm is not in healthy state"
+            success_msg: "Swarm is active and healthy"
+          when: "'manager' in group_names"
+      when: "'manager' in group_names"
 
     - name: Create overlay network
       community.docker.docker_network:
@@ -158,8 +126,8 @@
           ===========================
           Manager Node: {{ groups['manager'][0] }}
           Internal IP: {{ hostvars[groups['manager'][0]]['internal_ip'] }}
-          Swarm Token: (secured - check manager node for actual value via `docker swarm join-token worker`)
+          Swarm Token: (secured - check manager node)
           Overlay Network: turbogate_network
-          Node Count: {{ groups['workers']|length + 1 }}
+          Node Count: {{ groups['workers']|length + 1 }}  
       when: "'manager' in group_names"
       run_once: true
