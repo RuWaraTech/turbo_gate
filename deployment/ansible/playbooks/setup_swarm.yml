@@ -3,7 +3,7 @@
   become: yes
 
   tasks:
-
+    # Troubleshooting section
     - name: Debug system information
       debug:
         msg: |
@@ -30,40 +30,60 @@
       loop: "{{ network_configs.results }}"
       tags: debug
 
+    # Install netaddr for IP operations (needed for ipaddr filter)
+    - name: Install Python netaddr library
+      pip:
+        name: netaddr
+        state: present
 
-    - name: Ensure network interfaces.d directory exists
+    # Configure floating IP for systemd-networkd
+    - name: Configure floating IP with systemd-networkd
+      copy:
+        content: |
+          [Match]
+          Name=eth0
+          
+          [Network]
+          Address={{ floating_ip }}/32
+          {% if ansible_all_ipv6_addresses | length > 0 %}
+          Address={{ ansible_all_ipv6_addresses[0].split('/')[0] }}/64
+          {% endif %}
+        dest: /etc/systemd/network/60-floating-ip.network
+        mode: '0644'
+      notify: restart systemd-networkd
+      when: 
+        - floating_ip is defined
+        - network_configs.results[3].stat.exists  # systemd-networkd exists
+
+    # Configure floating IP for ifupdown (fallback)
+    - name: Ensure network interfaces.d directory exists (ifupdown)
       file:
         path: /etc/network/interfaces.d
         state: directory
         owner: root
         group: root
         mode: '0755'
-      when: network_configs.results[0].stat.exists  
+      when: network_configs.results[0].stat.exists  # Only if /etc/network/interfaces exists
 
-    - name: Ensure interfaces.d is sourced in main interfaces file
-      lineinfile:
-        path: /etc/network/interfaces
-        line: "source /etc/network/interfaces.d/*"
-        state: present
-      when: network_configs.results[0].stat.exists
-
-    - name: Configure floating IP interface
+    - name: Configure floating IP interface (ifupdown)
       copy:
         content: |
           auto eth0:1
           iface eth0:1 inet static
               address {{ floating_ip }}
               netmask 32
+          {% if ansible_all_ipv6_addresses | length > 0 %}
           auto eth0:1
           iface eth0:1 inet6 static
-              address {{ ansible_all_ipv6_addresses[0] | ipaddr('network') }}::2
-              netmask 64    
+              address {{ ansible_all_ipv6_addresses[0].split('/')[0] }}
+              netmask 64
+          {% endif %}
         dest: /etc/network/interfaces.d/60-my-floating-ip.cfg
         mode: '0644'
       notify: restart networking
       when: 
         - floating_ip is defined
-        - network_configs.results[0].stat.exists
+        - network_configs.results[0].stat.exists  # ifupdown exists
 
     - name: Install required packages
       apt:
@@ -77,37 +97,23 @@
         state: present
         update_cache: yes
     
-
+    # Create directory for Docker GPG key (newer method)
     - name: Create directory for Docker GPG key
       file:
         path: /etc/apt/keyrings
         state: directory
         mode: '0755'
 
-    - name: Add Docker GPG key (new method)
+    - name: Add Docker GPG key
       get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
         dest: /etc/apt/keyrings/docker.asc
         mode: '0644'
-      when: ansible_distribution_version is version('20.04', '>=')
-
-    - name: Add Docker GPG key (legacy method)
-      apt_key:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        state: present
-      when: ansible_distribution_version is version('20.04', '<')
     
-    - name: Add Docker repository (new method)
+    - name: Add Docker repository
       apt_repository:
         repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
-      when: ansible_distribution_version is version('20.04', '>=')
-
-    - name: Add Docker repository (legacy method)
-      apt_repository:
-        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
-        state: present
-      when: ansible_distribution_version is version('20.04', '<')
     
     - name: Install Docker
       apt:
@@ -132,19 +138,11 @@
         state: started
         enabled: yes
     
-    - name: Check if Swarm is already initialized
-      docker_swarm_info:
-      register: swarm_status
-      ignore_errors: yes
-      when: swarm_role == "manager"
-
     - name: Initialize Swarm on manager
       docker_swarm:
         state: present
         advertise_addr: "{{ floating_ip }}"
-      when: 
-        - swarm_role == "manager"
-        - swarm_status.docker_swarm_active is not defined or not swarm_status.docker_swarm_active
+      when: swarm_role == "manager"
       register: swarm_info
     
     - name: Get join token for workers
@@ -154,21 +152,6 @@
         - swarm_role == "manager"
         - swarm_info.swarm_facts is defined
     
-
-    - name: Get worker join token from existing swarm
-      shell: docker swarm join-token worker -q
-      register: existing_worker_token
-      when: 
-        - swarm_role == "manager"
-        - swarm_status.docker_swarm_active is defined and swarm_status.docker_swarm_active
-
-    - name: Set worker token from existing swarm
-      set_fact:
-        worker_token: "{{ existing_worker_token.stdout }}"
-      when: 
-        - swarm_role == "manager"
-        - existing_worker_token.stdout is defined
-
     - name: Join workers to swarm
       docker_swarm:
         state: join
@@ -185,10 +168,8 @@
       service:
         name: networking
         state: restarted
-      when: ansible_service_mgr != "systemd"
-      
-    - name: restart networking (systemd)
+        
+    - name: restart systemd-networkd
       systemd:
         name: systemd-networkd
         state: restarted
-      when: ansible_service_mgr == "systemd"
