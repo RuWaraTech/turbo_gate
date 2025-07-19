@@ -42,8 +42,8 @@
     - name: Initialize Docker Swarm on manager
       docker_swarm:
         state: present
-        advertise_addr: "{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}"
-        listen_addr: "{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}:2377"
+        advertise_addr: "{{ internal_ip }}"
+        listen_addr: "{{ internal_ip }}:2377"
       when: "'manager' in group_names"
       register: swarm_manager_info
 
@@ -58,7 +58,7 @@
     # Worker-specific tasks
     - name: Wait for manager to be ready
       wait_for:
-        host: "{{ hostvars[groups['manager'][0]]['ansible_default_ipv4']['address'] }}"
+        host: "{{ hostvars[groups['manager'][0]]['internal_ip'] }}"
         port: 2377
         delay: 5
         timeout: 60
@@ -67,10 +67,10 @@
     - name: Join workers to swarm
       docker_swarm:
         state: join
-        advertise_addr: "{{ ansible_default_ipv4.address }}"
+        advertise_addr: "{{ internal_ip }}"
         join_token: "{{ hostvars[groups['manager'][0]]['docker_worker_token'] }}"
         remote_addrs:
-          - "{{ hostvars[groups['manager'][0]]['ansible_default_ipv4']['address'] }}:2377"
+          - "{{ hostvars[groups['manager'][0]]['internal_ip'] }}:2377"
       when: 
         - "'workers' in group_names"
         - hostvars[groups['manager'][0]]['docker_worker_token'] is defined
@@ -103,7 +103,8 @@
       debug:
         msg:
           - "Swarm initialized successfully!"
-          - "Manager internal IP: {{ hostvars[groups['manager'][0]]['ansible_default_ipv4']['address'] }}"
+          - "Manager internal IP: {{ hostvars[groups['manager'][0]]['internal_ip'] }}"
+          - "Manager public IP: {{ hostvars[groups['manager'][0]]['ansible_default_ipv4']['address'] }}"
           - "Floating IP: {{ floating_ip }}"
           - "Worker token: {{ docker_worker_token | default('N/A') }}"
       when: "'manager' in group_names"
