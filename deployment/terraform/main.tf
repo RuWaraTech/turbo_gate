@@ -101,6 +101,24 @@ resource "hcloud_server" "manager" {
     role = "manager"
     app  = "turbogate"
   }
+
+  # This block automates the Floating IP configuration on the server
+  provisioner "remote-exec" {
+    inline = [
+      "echo 'auto eth0:1' | sudo tee /etc/network/interfaces.d/60-floating-ip.cfg",
+      "echo 'iface eth0:1 inet static' | sudo tee -a /etc/network/interfaces.d/60-floating-ip.cfg",
+      "echo '    address ${hcloud_floating_ip.main.ip_address}' | sudo tee -a /etc/network/interfaces.d/60-floating-ip.cfg",
+      "echo '    netmask 32' | sudo tee -a /etc/network/interfaces.d/60-floating-ip.cfg",
+      "sudo systemctl restart networking"
+    ]
+
+    connection {
+      type        = "ssh"
+      user        = "root"
+      private_key = var.ssh_private_key
+      host        = self.ipv4_address
+    }
+  }
 }
 
 # Worker Node (optional - for scaling)
