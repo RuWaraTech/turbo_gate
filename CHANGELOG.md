@@ -1,3 +1,9 @@
+## v0.6.4 (2025-07-19)
+
+### fix
+
+- moved the -e "floating_ip=${{ needs.deploy-infrastructure.outputs.floating_ip }}"  flag to the right place
+
 ## v0.6.3 (2025-07-19)
 
 ### fix
