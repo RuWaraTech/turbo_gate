@@ -30,13 +30,13 @@
       loop: "{{ network_configs.results }}"
       tags: debug
 
-    # Install netaddr for IP operations (needed for ipaddr filter)
+    # Install netaddr for IP operations
     - name: Install Python netaddr library
       pip:
         name: netaddr
         state: present
 
-    # Configure floating IP for systemd-networkd
+    # Configure floating IP for systemd-networkd (THIS IS WHAT YOUR SYSTEM USES)
     - name: Configure floating IP with systemd-networkd
       copy:
         content: |
@@ -45,8 +45,8 @@
           
           [Network]
           Address={{ floating_ip }}/32
-          {% if ansible_all_ipv6_addresses | length > 0 %}
-          Address={{ ansible_all_ipv6_addresses[0].split('/')[0] }}/64
+          {% if ansible_all_ipv6_addresses is defined and ansible_all_ipv6_addresses | length > 0 %}
+          Address={{ ansible_all_ipv6_addresses[0].split('/')[0] }}::2/64
           {% endif %}
         dest: /etc/systemd/network/60-floating-ip.network
         mode: '0644'
@@ -55,7 +55,7 @@
         - floating_ip is defined
         - network_configs.results[3].stat.exists  # systemd-networkd exists
 
-    # Configure floating IP for ifupdown (fallback)
+    # This section won't be used but is here for compatibility
     - name: Ensure network interfaces.d directory exists (ifupdown)
       file:
         path: /etc/network/interfaces.d
@@ -63,7 +63,7 @@
         owner: root
         group: root
         mode: '0755'
-      when: network_configs.results[0].stat.exists  # Only if /etc/network/interfaces exists
+      when: network_configs.results[0].stat.exists
 
     - name: Configure floating IP interface (ifupdown)
       copy:
@@ -72,18 +72,18 @@
           iface eth0:1 inet static
               address {{ floating_ip }}
               netmask 32
-          {% if ansible_all_ipv6_addresses | length > 0 %}
+          {% if ansible_all_ipv6_addresses is defined and ansible_all_ipv6_addresses | length > 0 %}
           auto eth0:1
           iface eth0:1 inet6 static
-              address {{ ansible_all_ipv6_addresses[0].split('/')[0] }}
+              address {{ ansible_all_ipv6_addresses[0] | ansible.utils.ipaddr('network') }}::2
               netmask 64
           {% endif %}
         dest: /etc/network/interfaces.d/60-my-floating-ip.cfg
         mode: '0644'
-      notify: restart networking
+      notify: restart systemd-networkd  # Changed this to use systemd-networkd
       when: 
         - floating_ip is defined
-        - network_configs.results[0].stat.exists  # ifupdown exists
+        - network_configs.results[0].stat.exists
 
     - name: Install required packages
       apt:
@@ -97,7 +97,6 @@
         state: present
         update_cache: yes
     
-    # Create directory for Docker GPG key (newer method)
     - name: Create directory for Docker GPG key
       file:
         path: /etc/apt/keyrings
@@ -164,12 +163,9 @@
         - hostvars[groups['swarm_managers'][0]]['worker_token'] is defined
 
   handlers:
-    - name: restart networking
-      service:
-        name: networking
-        state: restarted
-        
+    # Only systemd-networkd handler since that's what your system uses
     - name: restart systemd-networkd
       systemd:
         name: systemd-networkd
         state: restarted
+        daemon_reload: yes
