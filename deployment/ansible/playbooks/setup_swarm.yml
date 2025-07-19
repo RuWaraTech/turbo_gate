@@ -2,6 +2,7 @@
 - name: Setup Docker Swarm Cluster
   hosts: all
   become: yes
+  gather_facts: yes
 
   vars:
     docker_gpg_key_url: https://download.docker.com/linux/ubuntu/gpg
@@ -22,10 +23,18 @@
         state: present
         update_cache: yes
 
-    - name: Remove any old Docker sources (if any)
-      file:
-        path: /etc/apt/sources.list.d/docker.list
-        state: absent
+    - name: Clean up all existing Docker configurations
+      shell: |
+        rm -f /etc/apt/sources.list.d/docker.list*
+        rm -f /etc/apt/keyrings/docker.*
+        rm -f /usr/share/keyrings/docker*
+        apt-key del 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 2>/dev/null || true
+      ignore_errors: yes
+
+    - name: Update apt cache after cleanup
+      apt:
+        update_cache: yes
+      ignore_errors: yes
 
     - name: Ensure /etc/apt/keyrings directory exists
       file:
@@ -33,17 +42,22 @@
         state: directory
         mode: '0755'
 
-    - name: Add Docker GPG key to the correct keyring path
-      get_url:
-        url: "{{ docker_gpg_key_url }}"
-        dest: "{{ docker_gpg_key_path }}"
-        mode: '0644'
+    - name: Download and add Docker GPG key
+      shell: |
+        curl -fsSL {{ docker_gpg_key_url }} | gpg --dearmor -o {{ docker_gpg_key_path }}
+        chmod 644 {{ docker_gpg_key_path }}
+      args:
+        creates: "{{ docker_gpg_key_path }}"
 
-    - name: Add Docker APT repository
-      apt_repository:
-        repo: "{{ docker_repo }}"
+    - name: Add Docker APT repository with proper signed-by
+      lineinfile:
+        path: /etc/apt/sources.list.d/docker.list
+        line: "{{ docker_repo }}"
+        create: yes
         state: present
-        filename: docker
+
+    - name: Update apt cache after adding Docker repo
+      apt:
         update_cache: yes
 
     - name: Install Docker packages
@@ -64,11 +78,23 @@
           - jsondiff
         state: present
 
+    - name: Add user to docker group (optional)
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+      when: ansible_user is defined
+
     - name: Ensure Docker service is running
       systemd:
         name: docker
         state: started
         enabled: yes
+
+    - name: Check if node is already in a swarm
+      docker_swarm_info:
+      register: swarm_status
+      ignore_errors: yes
 
     - name: Initialize Swarm on manager
       docker_swarm:
