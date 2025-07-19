@@ -1,3 +1,9 @@
+## v0.5.0 (2025-07-19)
+
+### feat
+
+- add Hetzner Cloud infrastructure for TurboGate Docker Swarm cluster
+
 ## v0.4.16 (2025-07-19)
 
 ### fix
