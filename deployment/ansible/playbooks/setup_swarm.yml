@@ -75,13 +75,14 @@
         - "'workers' in group_names"
         - hostvars[groups['manager'][0]]['docker_worker_token'] is defined
       retries: 3
-      delay: 10
+      delay: 60
 
     # Verification tasks
     - name: Get docker swarm info
       docker_swarm_info:
       register: swarm_info
       changed_when: false
+      when: "'manager' in group_names"
 
     - name: Display swarm status
       debug:
