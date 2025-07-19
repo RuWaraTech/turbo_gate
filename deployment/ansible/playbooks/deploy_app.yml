@@ -8,6 +8,19 @@
     compose_file: /opt/turbogate/docker-compose.yml
   
   tasks:
+
+    - name: Debug received secret_key (for troubleshooting)
+      ansible.builtin.debug:
+        var: secret_key
+      no_log: true # Keep this for sensitive data!
+      when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
+
+    - name: Debug received redis_password (for troubleshooting)
+      ansible.builtin.debug:
+        var: redis_password
+      no_log: true # Keep this for sensitive data!
+      when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
+
     - name: Create application directories
       file:
         path: "{{ item }}"
