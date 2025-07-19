@@ -40,13 +40,21 @@
       loop:
         - /opt/turbogate
 
+    # NEW: Stop the Docker stack to release secrets before updating them
+    - name: Stop Docker stack to release secrets
+      community.docker.docker_stack:
+        name: "{{ stack_name }}"
+        state: absent # This will stop and remove the services, releasing the secrets
+      ignore_errors: true # Ignore if stack doesn't exist yet (first run)
+      when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
+
     - name: Debug secret item values before creation (for troubleshooting)
       ansible.builtin.debug:
         msg: "Secret Name: {{ item.name }}, Value: '{{ item.value }}', Base64 Encoded: '{{ item.value | b64encode }}'"
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
-      # no_log: true # Re-add for production
+      # no_log: true # TEMPORARILY COMMENTED OUT FOR DEBUGGING. RE-ADD FOR PRODUCTION!
 
     - name: Create Docker secrets
       community.docker.docker_secret:
@@ -183,3 +191,4 @@
     - name: Display service status
       ansible.builtin.debug:
         var: service_status.stdout_lines
+# 
