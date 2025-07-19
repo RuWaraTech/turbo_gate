@@ -26,52 +26,52 @@ resource "hcloud_firewall" "main" {
   name = "turbogate-firewall"
   
   rule {
-    direction = "in"
-    protocol  = "tcp"
-    port      = "22"
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "22"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
   
   rule {
-    direction = "in"
-    protocol  = "tcp"
-    port      = "80"
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "80"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
   
   rule {
-    direction = "in"
-    protocol  = "tcp"
-    port      = "443"
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "443"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
   
-  # Docker Swarm ports
+  # Docker Swarm ports - Internal only
   rule {
-    direction = "in"
-    protocol  = "tcp"
-    port      = "2377"
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "2377"
     source_ips = ["10.0.0.0/16"]
   }
   
   rule {
-    direction = "in"
-    protocol  = "tcp"
-    port      = "7946"
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "7946"
     source_ips = ["10.0.0.0/16"]
   }
   
   rule {
-    direction = "in"
-    protocol  = "udp"
-    port      = "7946"
+    direction  = "in"
+    protocol   = "udp"
+    port       = "7946"
     source_ips = ["10.0.0.0/16"]
   }
   
   rule {
-    direction = "in"
-    protocol  = "udp"
-    port      = "4789"
+    direction  = "in"
+    protocol   = "udp"
+    port       = "4789"
     source_ips = ["10.0.0.0/16"]
   }
 }
@@ -83,13 +83,12 @@ resource "hcloud_server" "manager" {
   server_type = var.server_type
   location    = var.location
   ssh_keys    = [hcloud_ssh_key.default.id]
+  firewall_ids = [hcloud_firewall.main.id]
   
   network {
     network_id = hcloud_network.main.id
     ip         = "10.0.1.10"
   }
-  
-  firewall_ids = [hcloud_firewall.main.id]
   
   user_data = <<-EOF
     #!/bin/bash
@@ -101,41 +100,22 @@ resource "hcloud_server" "manager" {
     role = "manager"
     app  = "turbogate"
   }
-
-  # This block automates the Floating IP configuration on the server
-  provisioner "remote-exec" {
-    inline = [
-      "echo 'auto eth0:1' | sudo tee /etc/network/interfaces.d/60-floating-ip.cfg",
-      "echo 'iface eth0:1 inet static' | sudo tee -a /etc/network/interfaces.d/60-floating-ip.cfg",
-      "echo '    address ${hcloud_floating_ip.main.ip_address}' | sudo tee -a /etc/network/interfaces.d/60-floating-ip.cfg",
-      "echo '    netmask 32' | sudo tee -a /etc/network/interfaces.d/60-floating-ip.cfg",
-      "sudo systemctl restart networking"
-    ]
-
-    connection {
-      type        = "ssh"
-      user        = "root"
-      private_key = var.ssh_private_key
-      host        = self.ipv4_address
-    }
-  }
 }
 
-# Worker Node (optional - for scaling)
+# Worker Nodes
 resource "hcloud_server" "worker" {
-  count       = 2 # Set to 1 or more when you need to scale
+  count       = 2
   name        = "turbogate-worker-${count.index + 1}"
   image       = "ubuntu-22.04"
   server_type = var.server_type
   location    = var.location
   ssh_keys    = [hcloud_ssh_key.default.id]
+  firewall_ids = [hcloud_firewall.main.id]
   
   network {
     network_id = hcloud_network.main.id
     ip         = "10.0.1.${11 + count.index}"
   }
-  
-  firewall_ids = [hcloud_firewall.main.id]
   
   user_data = <<-EOF
     #!/bin/bash
@@ -151,12 +131,20 @@ resource "hcloud_server" "worker" {
 
 # Floating IP for high availability
 resource "hcloud_floating_ip" "main" {
-  type      = "ipv4"
+  type          = "ipv4"
   home_location = var.location
   description   = "TurboGate Floating IP"
+  # Note: firewall_ids is not a valid argument for floating IPs
 }
 
+# Auto-assign floating IP to manager
 resource "hcloud_floating_ip_assignment" "main" {
   floating_ip_id = hcloud_floating_ip.main.id
   server_id      = hcloud_server.manager.id
+}
+
+# Output the floating IP for reference
+output "floating_ip" {
+  value = hcloud_floating_ip.main.ip_address
+  description = "The floating IP address assigned to the manager"
 }
