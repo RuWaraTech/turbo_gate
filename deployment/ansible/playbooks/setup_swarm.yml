@@ -2,24 +2,54 @@
   hosts: all
   become: yes
   vars:
-    ansible_python_interpreter: /usr/bin/python3  # Set the correct Python interpreter
+    ansible_python_interpreter: auto
 
   tasks:
-    # Install system-level Python netaddr package (more reliable than pip)
-    - name: Install python3-netaddr system package
+    # Debug Python information first
+    - name: Show Python information
+      debug:
+        msg: |
+          Ansible Python: {{ ansible_python.executable }}
+          Python version: {{ ansible_python.version }}
+          Pip version: {{ ansible_python.version.pip if ansible_python.version.pip is defined else 'Not available' }}
+          System Python3: {{ ansible_facts.python.version if ansible_facts.python is defined else 'Not found' }}
+
+    # Ensure Python3 and pip are available
+    - name: Install Python3 and pip
       apt:
-        name: python3-netaddr
+        name:
+          - python3
+          - python3-pip
         state: present
         update_cache: yes
       when: ansible_os_family == 'Debian'
+      register: python_install
 
-    # Fallback to pip installation if system package not available
-    - name: Install Python netaddr library via pip
+    - name: Debug Python installation
+      debug:
+        var: python_install
+
+    # Install netaddr specifically for Ansible's Python
+    - name: Install netaddr for Ansible
       pip:
         name: netaddr
         state: present
-        executable: pip3
-      when: ansible_os_family != 'Debian'
+        executable: "{{ ansible_python.executable }} -m pip"
+      register: netaddr_install
+
+    - name: Debug netaddr installation
+      debug:
+        var: netaddr_install
+
+    # Verify netaddr is importable
+    - name: Test netaddr import
+      command: "{{ ansible_python.executable }} -c 'import netaddr; print(netaddr.__version__)'"
+      register: netaddr_test
+      changed_when: false
+
+    - name: Show netaddr test results
+      debug:
+        var: netaddr_test
 
     # Configure floating IP interface (netplan)
     - name: Configure floating IP interface using Netplan
@@ -39,6 +69,7 @@
       notify: apply netplan configuration
       when: floating_ip is defined
 
+    # Docker installation tasks
     - name: Install required packages
       apt:
         name:
@@ -47,7 +78,6 @@
           - curl
           - gnupg
           - lsb-release
-          - python3-pip
         state: present
         update_cache: yes
 
@@ -84,7 +114,7 @@
           - docker
           - docker-compose
         state: present
-        executable: pip3
+        executable: "{{ ansible_python.executable }} -m pip"
 
     - name: Ensure Docker service is running
       systemd:
@@ -92,6 +122,7 @@
         state: started
         enabled: yes
 
+    # Swarm configuration
     - name: Initialize Swarm on manager
       docker_swarm:
         state: present
