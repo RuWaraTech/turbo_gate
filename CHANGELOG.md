@@ -1,3 +1,9 @@
+## v0.7.22 (2025-07-19)
+
+### fix
+
+- trying to see if secrest are passed
+
 ## v0.7.21 (2025-07-19)
 
 ### fix
