@@ -142,3 +142,13 @@ resource "hcloud_floating_ip_assignment" "main" {
   floating_ip_id = hcloud_floating_ip.main.id
   server_id      = hcloud_server.manager.id
 }
+
+resource "local_file" "ansible_inventory" {
+  content = templatefile("${path.module}/../ansible/inventory/inventory.tpl", {
+    manager_ip   = hcloud_server.manager.ipv4_address
+    worker_1_ip  = hcloud_server.worker[0].ipv4_address
+    worker_2_ip  = hcloud_server.worker[1].ipv4_address
+    floating_ip  = hcloud_floating_ip.main.ip_address
+  })
+  filename = "${path.module}/../ansible/inventory/production.yml"
+}

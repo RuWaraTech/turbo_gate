@@ -1,43 +1,14 @@
 ---
-- name: Setup Docker Swarm Cluster
+- name: Setup Docker Swarm Cluster on Hetzner Cloud
   hosts: all
   become: yes
   gather_facts: yes
-
   vars:
-    docker_gpg_key_url: https://download.docker.com/linux/ubuntu/gpg
-    docker_gpg_key_path: /etc/apt/keyrings/docker.asc
-    docker_repo: "deb [arch=amd64 signed-by={{ docker_gpg_key_path }}] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release | lower }} stable"
-
+    # The floating IP is passed as extra var
+    swarm_advertise_addr: "{{ floating_ip | default(ansible_default_ipv4.address) }}"
+    
   tasks:
-
-    - name: Install pre-requisite packages
-      apt:
-        name:
-          - apt-transport-https
-          - ca-certificates
-          - curl
-          - gnupg
-          - lsb-release
-          - python3-pip
-        state: present
-        update_cache: yes
-
-    - name: Clean up all existing Docker configurations
-      shell: |
-        rm -f /etc/apt/sources.list.d/docker.list*
-        rm -f /etc/apt/keyrings/docker.*
-        rm -f /usr/share/keyrings/docker*
-        apt-key del 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 2>/dev/null || true
-        apt-key del 7EA0A9C3F273FCD8 2>/dev/null || true
-      ignore_errors: yes
-
-    - name: Update apt cache after cleanup
-      apt:
-        update_cache: yes
-      ignore_errors: yes
-
-    - name: Install Docker using official script (more reliable)
+    - name: Install Docker using official script
       shell: |
         curl -fsSL https://get.docker.com -o get-docker.sh
         sh get-docker.sh
@@ -45,13 +16,14 @@
       args:
         creates: /usr/bin/docker
 
-    - name: Ensure Docker service is enabled
+    - name: Start and enable Docker service
       systemd:
         name: docker
-        enabled: yes
         state: started
+        enabled: yes
+        daemon_reload: yes
 
-    - name: Install Docker Python libraries
+    - name: Install Docker Python SDK
       pip:
         name:
           - docker
@@ -59,35 +31,80 @@
           - jsondiff
         state: present
 
-    - name: Add user to docker group (optional)
+    - name: Add ansible user to docker group
       user:
         name: "{{ ansible_user }}"
         groups: docker
         append: yes
       when: ansible_user is defined and ansible_user != 'root'
 
-    - name: Check if node is already in a swarm
-      docker_swarm_info:
-      register: swarm_status
-      ignore_errors: yes
-
-    - name: Initialize Swarm on manager
+    # Manager-specific tasks
+    - name: Initialize Docker Swarm on manager
       docker_swarm:
         state: present
-        advertise_addr: "{{ ansible_default_ipv4.address }}"
-      when: swarm_role == "manager"
-      register: swarm_info
+        advertise_addr: "{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}"
+        listen_addr: "{{ hostvars[inventory_hostname]['ansible_default_ipv4']['address'] }}:2377"
+      when: "'manager' in group_names"
+      register: swarm_manager_info
 
-    - name: Get join token for workers
+    - name: Store join tokens
       set_fact:
-        worker_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
-      when: swarm_role == "manager"
+        docker_worker_token: "{{ swarm_manager_info.swarm_facts.JoinTokens.Worker }}"
+        docker_manager_token: "{{ swarm_manager_info.swarm_facts.JoinTokens.Manager }}"
+      when: 
+        - "'manager' in group_names"
+        - swarm_manager_info.swarm_facts is defined
+
+    # Worker-specific tasks
+    - name: Wait for manager to be ready
+      wait_for:
+        host: "{{ hostvars[groups['manager'][0]]['ansible_default_ipv4']['address'] }}"
+        port: 2377
+        delay: 5
+        timeout: 60
+      when: "'workers' in group_names"
 
     - name: Join workers to swarm
       docker_swarm:
         state: join
-        join_token: "{{ hostvars[groups['swarm_managers'][0]]['worker_token'] }}"
-        remote_addrs: ["{{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}:2377"]
-      when:
-        - swarm_role == "worker"
-        - groups['swarm_workers'] | length > 0
+        advertise_addr: "{{ ansible_default_ipv4.address }}"
+        join_token: "{{ hostvars[groups['manager'][0]]['docker_worker_token'] }}"
+        remote_addrs:
+          - "{{ hostvars[groups['manager'][0]]['ansible_default_ipv4']['address'] }}:2377"
+      when: 
+        - "'workers' in group_names"
+        - hostvars[groups['manager'][0]]['docker_worker_token'] is defined
+      retries: 3
+      delay: 10
+
+    # Verification tasks
+    - name: Get docker swarm info
+      docker_swarm_info:
+      register: swarm_info
+      changed_when: false
+
+    - name: Display swarm status
+      debug:
+        msg:
+          - "Node ID: {{ swarm_info.docker_node_id | default('Not in swarm') }}"
+          - "Swarm State: {{ swarm_info.docker_swarm_active }}"
+          - "Node Address: {{ swarm_info.docker_node_addr | default('N/A') }}"
+
+    # Only on manager: set up initial swarm services
+    - name: Create overlay network for applications
+      docker_network:
+        name: turbogate_network
+        driver: overlay
+        driver_options:
+          encrypted: "true"
+      when: "'manager' in group_names"
+
+    - name: Display connection information
+      debug:
+        msg:
+          - "Swarm initialized successfully!"
+          - "Manager internal IP: {{ hostvars[groups['manager'][0]]['ansible_default_ipv4']['address'] }}"
+          - "Floating IP: {{ floating_ip }}"
+          - "Worker token: {{ docker_worker_token | default('N/A') }}"
+      when: "'manager' in group_names"
+      run_once: true

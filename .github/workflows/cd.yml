@@ -2,7 +2,7 @@ name: Deploy to Production
 
 on:
   workflow_run:
-    workflows: ["Bump Version and Create Release"]  # Changed from "CI - Turbo Gate"
+    workflows: ["Bump Version and Create Release"]
     types:
       - completed
     branches: [main]
@@ -58,7 +58,6 @@ jobs:
       - name: 🏷️ Get latest version tag
         id: version
         run: |
-          # Get the latest tag (should be the one just created by the bump workflow)
           LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           echo "version_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
           echo "Latest version tag: $LATEST_TAG"
@@ -69,9 +68,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
           else
-            # Use the version tag from the bump workflow
             VERSION_TAG="${{ steps.version.outputs.version_tag }}"
-            # Remove 'v' prefix if present for docker tag
             CLEAN_VERSION=${VERSION_TAG#v}
             echo "image_tag=$CLEAN_VERSION" >> $GITHUB_OUTPUT
             echo "Using version tag: $CLEAN_VERSION"
@@ -132,6 +129,7 @@ jobs:
     outputs:
       manager_ip: ${{ steps.terraform.outputs.manager_ip }}
       floating_ip: ${{ steps.terraform.outputs.floating_ip }}
+      worker_ips: ${{ steps.terraform.outputs.worker_ips }}
     
     steps:
       - name: 🧱 Checkout deployment code
@@ -141,12 +139,13 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.12.2
+          terraform_wrapper: false
       
       - name: 🏗️ Terraform Init
         working-directory: deployment/terraform
         env:
-         AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
-         AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
         run: terraform init -reconfigure
       
       - name: 🔍 Terraform Plan
@@ -170,11 +169,19 @@ jobs:
           TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
           TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-          
         run: |
           terraform apply -auto-approve tfplan
           echo "manager_ip=$(terraform output -raw manager_ip)" >> $GITHUB_OUTPUT
           echo "floating_ip=$(terraform output -raw floating_ip)" >> $GITHUB_OUTPUT
+          echo "worker_ips=$(terraform output -json worker_ips)" >> $GITHUB_OUTPUT
+      
+      # Upload the Terraform-generated inventory
+      - name: 📦 Upload inventory artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: deployment/ansible/inventory/production.yml
+          retention-days: 1
 
   deploy-application:
     needs: [pre-deploy-check, build-and-push, deploy-infrastructure]
@@ -200,32 +207,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install ansible ansible-core
       
-      - name: 📝 Create Ansible inventory
+      # Download the Terraform-generated inventory
+      - name: 📥 Download inventory artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: deployment/ansible/inventory/
+      
+      - name: 📝 Display inventory contents
         working-directory: deployment/ansible
         run: |
-          cat > inventory/production.yml <<EOF
-          all:
-            vars:
-              ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
-              ansible_python_interpreter: /usr/bin/python3
-            children:
-              swarm_managers:
-                hosts:
-                  manager:
-                    ansible_host: ${{ needs.deploy-infrastructure.outputs.manager_ip }}
-                    ansible_user: root
-                    swarm_role: manager
-              swarm_workers:
-                hosts: {}
-          EOF
+          echo "Terraform-generated inventory:"
+          cat inventory/production.yml
       
       - name: 🔧 Setup Docker Swarm
         working-directory: deployment/ansible
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
-          ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml \
-          -e "floating_ip=${{ needs.deploy-infrastructure.outputs.floating_ip }}" 
+          ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml
       
       - name: 🔒 Setup NGINX with SSL
         working-directory: deployment/ansible
@@ -240,7 +240,6 @@ jobs:
         working-directory: deployment/ansible
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
-
         run: |
           ansible-playbook -i inventory/production.yml playbooks/deploy_app.yml \
             -e "secret_key=${{ secrets.SECRET_KEY }}" \
@@ -248,8 +247,7 @@ jobs:
             -e "image_tag=${{ needs.pre-deploy-check.outputs.image_tag }}" \
             -e "docker_registry=docker.io" \
             -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
-            -e "version=${{ needs.pre-deploy-check.outputs.version_tag }}" \
-            
+            -e "version=${{ needs.pre-deploy-check.outputs.version_tag }}"
 
   verify-deployment:
     needs: [pre-deploy-check, deploy-infrastructure, deploy-application]
@@ -301,7 +299,6 @@ jobs:
           script: |
             echo "⚠️ Deployment verification failed, initiating rollback..."
             
-            # Get previous service configuration
             PREV_IMAGE=$(docker service inspect turbogate_turbogate --format='{{.PreviousSpec.TaskTemplate.ContainerSpec.Image}}')
             
             if [ ! -z "$PREV_IMAGE" ]; then
@@ -348,10 +345,8 @@ jobs:
             exit 0
           fi
           
-          # Calculate deployment duration
           DURATION="${{ job.duration || 'N/A' }}"
           
-          # Build deployment info
           if [ "${{ steps.status.outputs.status }}" == "success" ]; then
             DEPLOYMENT_INFO="**URL**: https://${{ secrets.DOMAIN_NAME }}\n**Server IP**: ${{ needs.deploy-infrastructure.outputs.floating_ip || 'N/A' }}\n**Version**: ${{ needs.pre-deploy-check.outputs.version_tag }}"
           else
@@ -410,7 +405,6 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Clean up old workflow runs to save storage
             const runs = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
