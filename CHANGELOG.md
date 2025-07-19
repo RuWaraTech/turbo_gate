@@ -1,3 +1,9 @@
+## v0.6.3 (2025-07-19)
+
+### fix
+
+- removed comments as they are breaking the run
+
 ## v0.6.2 (2025-07-19)
 
 ### fix
