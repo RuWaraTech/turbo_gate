@@ -1,3 +1,9 @@
+## v0.5.2 (2025-07-19)
+
+### fix
+
+- installation of jsondiff library
+
 ## v0.5.1 (2025-07-19)
 
 ### fix
