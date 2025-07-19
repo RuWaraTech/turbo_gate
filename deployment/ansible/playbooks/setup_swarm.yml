@@ -93,6 +93,13 @@
           register: swarm_facts
           when: "'manager' in group_names"
 
+        - name: Debug swarm_facts
+          ansible.builtin.debug:
+            var: swarm_facts
+            # Or to see the full structure:
+            msg: "{{ swarm_facts | to_nice_json }}"
+          when: "'manager' in group_names" # Only debug on managers
+
         - name: Verify swarm health
           ansible.builtin.assert:
             that:
