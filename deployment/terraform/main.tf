@@ -142,9 +142,3 @@ resource "hcloud_floating_ip_assignment" "main" {
   floating_ip_id = hcloud_floating_ip.main.id
   server_id      = hcloud_server.manager.id
 }
-
-# Output the floating IP for reference
-output "floating_ip" {
-  value = hcloud_floating_ip.main.ip_address
-  description = "The floating IP address assigned to the manager"
-}
