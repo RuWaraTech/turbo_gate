@@ -134,7 +134,7 @@
           ansible.builtin.assert:
             that:
               # Node Status: 'ready' is the healthy state for a node in the swarm.
-              - local_manager_node.Status.State == "ready"
+              - local_manager_node.Status == "ready"
               # Manager Status: Your debug shows 'ManagerStatus: "Leader"' for the manager.
               # So, we check if ManagerStatus is defined and if it contains "Leader".
               - local_manager_node.ManagerStatus is defined
