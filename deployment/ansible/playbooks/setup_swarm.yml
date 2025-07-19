@@ -1,122 +1,126 @@
----
 - name: Setup Docker Swarm Cluster on Hetzner Cloud
   hosts: all
   become: yes
   gather_facts: yes
   vars:
-    # The floating IP is passed as extra var
-    # swarm_advertise_addr: "{{ floating_ip | default(ansible_default_ipv4.address) }}"
-      swarm_advertise_addr: "{{ internal_ip }}:2377"
+    swarm_advertise_addr: "{{ internal_ip }}"
+    swarm_listen_addr: "{{ internal_ip }}:2377"
+    join_retries: 3
+    join_retry_delay: 10  # Increased from 5 to 10 seconds for better stability
+
   tasks:
     - name: Install Docker using official script
-      shell: |
-        curl -fsSL https://get.docker.com -o get-docker.sh
-        sh get-docker.sh
-        rm get-docker.sh
-      args:
-        creates: /usr/bin/docker
+      ansible.builtin.get_url:
+        url: https://get.docker.com
+        dest: /tmp/get-docker.sh
+        mode: '0755'
+      changed_when: false
 
-    - name: Start and enable Docker service
-      systemd:
+    - name: Execute Docker installation
+      ansible.builtin.command: /tmp/get-docker.sh
+      args:
+        removes: /tmp/get-docker.sh
+
+    - name: Ensure Docker service is running
+      ansible.builtin.systemd:
         name: docker
         state: started
         enabled: yes
         daemon_reload: yes
 
-    - name: Install Docker Python SDK
-      pip:
+    - name: Install required Python packages
+      ansible.builtin.pip:
         name:
           - docker
           - docker-compose
           - jsondiff
         state: present
 
-    - name: Add ansible user to docker group
-      user:
-        name: "{{ ansible_user }}"
+    - name: Configure non-root Docker access
+      ansible.builtin.user:
+        name: "{{ ansible_user | default('ubuntu') }}"
         groups: docker
         append: yes
-      when: ansible_user is defined and ansible_user != 'root'
 
-    # Manager-specific tasks
     - name: Initialize Docker Swarm on manager
-      docker_swarm:
+      community.docker.docker_swarm:
         state: present
-        advertise_addr: "{{ internal_ip }}"
-        listen_addr: "{{ internal_ip }}:2377"
+        advertise_addr: "{{ swarm_advertise_addr }}"
+        listen_addr: "{{ swarm_listen_addr }}"
+        force: yes
       when: "'manager' in group_names"
-      register: swarm_manager_info
+      register: swarm_init
+      retries: 3
+      delay: 5
 
-    - name: Store join tokens
-      set_fact:
-        docker_worker_token: "{{ swarm_manager_info.swarm_facts.JoinTokens.Worker }}"
-        docker_manager_token: "{{ swarm_manager_info.swarm_facts.JoinTokens.Manager }}"
+    - name: Store swarm tokens securely
+      ansible.builtin.set_fact:
+        docker_worker_token: "{{ swarm_init.swarm_facts.JoinTokens.Worker }}"
+        docker_manager_token: "{{ swarm_init.swarm_facts.JoinTokens.Manager }}"
       when: 
         - "'manager' in group_names"
-        - swarm_manager_info.swarm_facts is defined
+        - swarm_init.swarm_facts is defined
+      no_log: true  # Prevents token exposure in logs
 
-    # Worker-specific tasks
-    - name: Wait for manager to be ready
-      wait_for:
-        host: "{{ hostvars[groups['manager'][0]]['internal_ip'] }}"
+    - name: Verify manager readiness
+      ansible.builtin.wait_for:
+        host: "{{ swarm_advertise_addr }}"
         port: 2377
+        state: started
         delay: 5
-        timeout: 60
+        timeout: 120  # Increased timeout for cloud environments
       when: "'workers' in group_names"
 
     - name: Join workers to swarm
-      docker_swarm:
+      community.docker.docker_swarm:
         state: join
-        advertise_addr: "{{ internal_ip }}"
-        join_token: "{{ hostvars[groups['manager'][0]]['docker_worker_token'] }}"
+        advertise_addr: "{{ swarm_advertise_addr }}"
+        join_token: "{{ hostvars[groups['manager'][0]['docker_worker_token'] }}"
         remote_addrs:
-          - "{{ hostvars[groups['manager'][0]]['internal_ip'] }}:2377"
+          - "{{ hostvars[groups['manager'][0]['internal_ip'] }}:2377"
       when: 
         - "'workers' in group_names"
         - hostvars[groups['manager'][0]]['docker_worker_token'] is defined
-      retries: 3
-      delay: 60
+      retries: "{{ join_retries }}"
+      delay: "{{ join_retry_delay }}"
+      register: join_result
+      until: join_result is succeeded
 
-    - name: Verify Docker Swarm status (minimal check)
+    - name: Validate swarm status
       block:
-        - name: Check if swarm is active
-          command: docker info | grep -E "Swarm|Node Address"
-          register: swarm_check
-          changed_when: false
-          ignore_errors: yes
+        - name: Get swarm facts
+          community.docker.docker_swarm_info:
+          register: swarm_facts
           when: "'manager' in group_names"
 
-        - name: List swarm nodes
-          command: docker node ls
-          register: node_list
-          changed_when: false
+        - name: Verify swarm health
+          ansible.builtin.assert:
+            that:
+              - swarm_facts.swarm.LocalNodeState == "active"
+              - "'Leader' in swarm_facts.swarm.ManagerStatus|default('')"
+            fail_msg: "Swarm is not in healthy state"
+            success_msg: "Swarm is active and healthy"
           when: "'manager' in group_names"
+      when: "'manager' in group_names"
 
-        - name: Show swarm status
-          debug:
-            msg:
-              - "Swarm Status: {{ swarm_check.stdout_lines | select('match', 'Swarm') | first | default('Swarm: inactive') }}"
-              - "Node Address: {{ swarm_check.stdout_lines | select('match', 'Node Address') | first | default('N/A') }}"
-              - "Node List:"
-              - "{{ node_list.stdout }}"
-          when: "'manager' in group_names"
-          
-    # Only on manager: set up initial swarm services
-    - name: Create overlay network for applications
-      docker_network:
+    - name: Create overlay network
+      community.docker.docker_network:
         name: turbogate_network
         driver: overlay
+        attachable: yes
         driver_options:
           encrypted: "true"
       when: "'manager' in group_names"
 
-    - name: Display connection information
-      debug:
-        msg:
-          - "Swarm initialized successfully!"
-          - "Manager internal IP: {{ hostvars[groups['manager'][0]]['internal_ip'] }}"
-          - "Manager public IP: {{ hostvars[groups['manager'][0]]['ansible_default_ipv4']['address'] }}"
-          - "Floating IP: {{ floating_ip }}"
-          - "Worker token: {{ docker_worker_token | default('N/A') }}"
+    - name: Display swarm connection info
+      ansible.builtin.debug:
+        msg: |
+          SWARM DEPLOYMENT SUCCESSFUL
+          ===========================
+          Manager Node: {{ groups['manager'][0] }}
+          Internal IP: {{ hostvars[groups['manager'][0]]['internal_ip'] }}
+          Swarm Token: (secured - check manager node)
+          Overlay Network: turbogate_network
+          Node Count: {{ groups['workers']|length + 1 }}  
       when: "'manager' in group_names"
       run_once: true
