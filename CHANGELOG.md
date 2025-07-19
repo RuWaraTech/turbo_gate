@@ -1,3 +1,9 @@
+## v0.7.13 (2025-07-19)
+
+### fix
+
+- do not run if already connected
+
 ## v0.7.12 (2025-07-19)
 
 ### fix
