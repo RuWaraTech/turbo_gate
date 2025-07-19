@@ -57,7 +57,7 @@
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
       when: item.value is defined and item.value | length > 0 # Only create secret if value is not empty
-      no_log: true # Prevents sensitive data from appearing in logs
+      # no_log: true # Prevents sensitive data from appearing in logs
     
     - name: Create Docker network
       community.docker.docker_network:
