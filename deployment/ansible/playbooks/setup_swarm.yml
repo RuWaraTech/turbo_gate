@@ -1,9 +1,25 @@
----
 - name: Setup Docker Swarm Cluster
   hosts: all
   become: yes
-  
+
   tasks:
+    # -- NEW TASK ADDED HERE --
+    - name: Configure floating IP interface
+      copy:
+        content: |
+          auto eth0:1
+          iface eth0:1 inet static
+              address {{ floating_ip }}
+              netmask 32
+          
+          auto eth0:1
+          iface eth0:1 inet6 static
+              address {{ ansible_default_ipv6.network }}::2
+              netmask 64
+        dest: /etc/network/interfaces.d/60-my-floating-ip.cfg
+        mode: '0644'
+      notify: restart networking
+
     - name: Install required packages
       apt:
         name:
@@ -41,7 +57,6 @@
         name:
           - docker
           - docker-compose
-          - jsondiff
         state: present
     
     - name: Ensure Docker service is running
@@ -53,7 +68,8 @@
     - name: Initialize Swarm on manager
       docker_swarm:
         state: present
-        advertise_addr: "{{ ansible_default_ipv4.address }}"
+        # -- THIS LINE WAS MODIFIED --
+        advertise_addr: "{{ floating_ip }}"
       when: swarm_role == "manager"
       register: swarm_info
     
@@ -70,3 +86,10 @@
       when: 
         - swarm_role == "worker"
         - groups['swarm_workers'] | length > 0
+
+  # -- NEW HANDLERS BLOCK ADDED HERE --
+  handlers:
+    - name: restart networking
+      service:
+        name: networking
+        state: restarted

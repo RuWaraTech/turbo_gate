@@ -246,7 +246,8 @@ jobs:
             -e "image_tag=${{ needs.pre-deploy-check.outputs.image_tag }}" \
             -e "docker_registry=docker.io" \
             -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
-            -e "version=${{ needs.pre-deploy-check.outputs.version_tag }}"
+            -e "version=${{ needs.pre-deploy-check.outputs.version_tag }}" \
+            -e "floating_ip=${{ steps.terraform.outputs.floating_ip }}"
 
   verify-deployment:
     needs: [pre-deploy-check, deploy-infrastructure, deploy-application]
