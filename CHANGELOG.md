@@ -1,3 +1,9 @@
+## v0.6.15 (2025-07-19)
+
+### fix
+
+- correct Python interpreter and netaddr installation for Docker Swarm setup
+
 ## v0.6.14 (2025-07-19)
 
 ### fix
