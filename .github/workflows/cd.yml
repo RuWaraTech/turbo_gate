@@ -224,7 +224,7 @@ jobs:
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
-          ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml
+          ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml \
           -e "floating_ip=${{ needs.deploy-infrastructure.outputs.floating_ip }}" 
       
       - name: 🔒 Setup NGINX with SSL
