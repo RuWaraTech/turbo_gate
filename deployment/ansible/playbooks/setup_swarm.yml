@@ -1,0 +1,112 @@
+
+- name: Setup Docker Swarm Cluster
+  hosts: all
+  become: yes
+
+  tasks:
+    # Removed: No longer need to install ifupdown if using netplan
+
+    # Install netaddr for IP operations (still useful for IP calculations if needed)
+    - name: Install Python netaddr library
+      pip:
+        name: netaddr
+        state: present
+
+    # Configure floating IP interface (netplan)
+    - name: Configure floating IP interface using Netplan
+      copy:
+        content: |
+          network:
+            version: 2
+            ethernets:
+              eth0:
+                addresses:
+                  - {{ floating_ip }}/32
+                  {% if ansible_all_ipv6_addresses is defined and ansible_all_ipv6_addresses | length > 0 %}
+                  - "{{ ansible_all_ipv6_addresses[0] | ansible.utils.ipaddr('network') }}::2/64"
+                  {% endif %}
+        dest: /etc/netplan/60-my-floating-ip.yaml
+        mode: '0644'
+      notify: apply netplan configuration
+      when: floating_ip is defined
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    - name: Create directory for Docker GPG key
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker GPG key
+      get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Install Docker Python library
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+
+    - name: Ensure Docker service is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Initialize Swarm on manager
+      docker_swarm:
+        state: present
+        advertise_addr: "{{ floating_ip }}"
+      when: swarm_role == "manager"
+      register: swarm_info
+
+    - name: Get join token for workers
+      set_fact:
+        worker_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
+      when:
+        - swarm_role == "manager"
+        - swarm_info.swarm_facts is defined
+
+    - name: Join workers to swarm
+      docker_swarm:
+        state: join
+        join_token: "{{ hostvars[groups['swarm_managers'][0]]['worker_token'] }}"
+        remote_addrs: ["{{ hostvars[groups['swarm_managers'][0]]['floating_ip'] }}:2377"]
+      when:
+        - swarm_role == "worker"
+        - groups['swarm_managers'] is defined
+        - groups['swarm_managers'] | length > 0
+        - hostvars[groups['swarm_managers'][0]]['worker_token'] is defined
+
+  handlers:
+    - name: apply netplan configuration
+      command: netplan apply
