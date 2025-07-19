@@ -1,3 +1,9 @@
+## v0.6.2 (2025-07-19)
+
+### fix
+
+- TASK [Configure floating IP interface] ***************************************** fatal: [manager]: FAILED! => {"msg": "The task includes an option with an undefined variable.. 'floating_ip' is undefined\n\nThe error appears to be in '/home/runner/work/turbo_gate/turbo_gate/deployment/ansible/playbooks/setup_swarm.yml': line 7, column 7, but may\nbe elsewhere in the file depending on the exact syntax problem.\n\nThe offending line appears to be:\n\n    # -- NEW TASK ADDED HERE --\n    - name: Configure floating IP interface\n      ^ here\n"} PLAY RECAP *********************************************************************
+
 ## v0.6.1 (2025-07-19)
 
 ### fix
