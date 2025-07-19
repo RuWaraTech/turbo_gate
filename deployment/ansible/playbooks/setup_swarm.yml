@@ -141,7 +141,7 @@
           ansible.builtin.set_fact:
             local_manager_node: "{{ node_facts.nodes | selectattr('Hostname', 'equalto', ansible_hostname) | first }}"
           when:
-            - "'manager' in group_names'" # Ensure this only runs on managers
+            - 'manager' in group_names # Ensure this only runs on managers
             - node_facts.nodes is defined
             - node_facts.nodes | length > 0 # Ensure there are nodes to select from
 
