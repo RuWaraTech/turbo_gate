@@ -4,6 +4,18 @@
   become: yes
   
   tasks:
+    - name: Ensure /etc/apt/keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker GPG key to the correct keyring path
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644' # Recommended permission for keyring files
+
     - name: Install required packages
       apt:
         name:
@@ -16,15 +28,12 @@
         state: present
         update_cache: yes
     
-    - name: Add Docker GPG key
-      apt_key:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        state: present
-    
     - name: Add Docker repository
-      apt_repository:
-        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
+        filename: docker # Ensures it creates /etc/apt/sources.list.d/docker.list
+        update_cache: yes # Update cache after adding repo
     
     - name: Install Docker
       apt:
