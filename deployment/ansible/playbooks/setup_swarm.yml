@@ -76,6 +76,7 @@
     # --- Worker Join Idempotency Check ---
     - name: Check local Docker Swarm status on workers
       community.docker.docker_swarm_info:
+        nodes: true
       register: worker_swarm_status
       when: "'workers' in group_names" # Only run this on worker nodes
 
