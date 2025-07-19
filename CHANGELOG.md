@@ -1,3 +1,9 @@
+## v0.6.6 (2025-07-19)
+
+### fix
+
+- missed \  so variable was not getting passed
+
 ## v0.6.5 (2025-07-19)
 
 ### fix
