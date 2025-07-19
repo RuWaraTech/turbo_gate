@@ -1,3 +1,9 @@
+## v0.6.5 (2025-07-19)
+
+### fix
+
+- removed "" from floating ip
+
 ## v0.6.4 (2025-07-19)
 
 ### fix
