@@ -1,3 +1,9 @@
+## v0.6.7 (2025-07-19)
+
+### fix
+
+- removing IPv6 configuration
+
 ## v0.6.6 (2025-07-19)
 
 ### fix
