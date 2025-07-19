@@ -1,28 +1,37 @@
 ---
 - name: Deploy TurboGate Application
-  hosts: swarm_managers
+  hosts: swarm_managers # This means the stack will be deployed from the manager node
   become: yes
   
   vars:
     stack_name: turbogate
     compose_file: /opt/turbogate/docker-compose.yml
-  
-  tasks:
+    # IMPORTANT: The 'secret_key', 'redis_password', 'docker_registry', 'image_tag',
+    # 'domain_name', and 'app_replicas' variables MUST be passed to Ansible
+    # via -e (extra-vars) during playbook execution, or defined in group_vars/host_vars.
+    # Example (DO NOT hardcode sensitive values here in production):
+    # secret_key: "your_flask_secret_key_here"
+    # redis_password: "your_redis_password_here"
+    # docker_registry: "docker.io"
+    # image_tag: "0.7.19"
+    # app_replicas: 2
 
+  tasks:
+    # Debug tasks to verify secret values (TEMPORARILY SHOWING VALUES FOR DEBUGGING. RE-ADD 'no_log: true' FOR PRODUCTION!)
     - name: Debug received secret_key (for troubleshooting)
       ansible.builtin.debug:
-        var: secret_key
-      no_log: true # Keep this for sensitive data!
-      when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
+        var: secret_key # This will now show the actual value
+      no_log: true # Re-add for production
+      # when: ansible_check_mode is not defined or not ansible_check_mode # Re-add for production
 
     - name: Debug received redis_password (for troubleshooting)
       ansible.builtin.debug:
-        var: redis_password
-      no_log: true # Keep this for sensitive data!
-      when: ansible_check_mode is not defined or not ansible_check_mode # Only run in normal mode
+        var: redis_password # This will now show the actual value
+      no_log: true # Re-add for production
+      # when: ansible_check_mode is not defined or not ansible_check_mode # Re-add for production
 
     - name: Create application directories
-      file:
+      ansible.builtin.file:
         path: "{{ item }}"
         state: directory
         owner: root
@@ -30,22 +39,40 @@
         mode: '0755'
       loop:
         - /opt/turbogate
+
+    - name: Debug secret item values before creation (for troubleshooting)
+      ansible.builtin.debug:
+        msg: "Secret Name: {{ item.name }}, Value: '{{ item.value }}', Base64 Encoded: '{{ item.value | b64encode }}'"
+      loop:
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
+        - { name: "redis_password", value: "{{ redis_password }}" }
+      no_log: true # Re-add for production
+
+    - name: Create Docker secrets
+      community.docker.docker_secret:
+        name: "{{ item.name }}"
+        data: "{{ item.value | b64encode }}"
+        state: present
+      loop:
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
+        - { name: "redis_password", value: "{{ redis_password }}" }
+      when: item.value is defined and item.value | length > 0 # Only create secret if value is not empty
+      no_log: true # Prevents sensitive data from appearing in logs
     
-    - name: Ensure Docker network exists
-      docker_network:
-        name: turbogate_network
+    - name: Create Docker network
+      community.docker.docker_network:
+        name: turbogate_network # Changed from 'turbogate_net' for consistency with setup_swarm.yml
         driver: overlay
         attachable: yes
-        state: present
     
     - name: Create Docker Compose file for the entire stack
-      copy:
+      ansible.builtin.copy:
         content: |
           version: '3.8'
 
           services:
             turbogate:
-              image: {{ docker_registry }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}
+              image: {{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}
               deploy:
                 replicas: {{ app_replicas | default(2) }}
                 update_config:
@@ -58,20 +85,21 @@
                   max_attempts: 3
                 resources:
                   limits:
-                    cpus: '2.0'
-                    memory: 4G
+                    cpus: '0.5'
+                    memory: 512M
                   reservations:
-                    cpus: '1.0'
-                    memory: 2G
+                    cpus: '0.25'
+                    memory: 256M
               environment:
                 - FLASK_ENV=prod
-                - REDIS_URL=redis://:{{ redis_password }}@redis:6379/0
+                - REDIS_URL=redis://redis:6379/0
                 - LOG_LEVEL=INFO
                 - DOMAIN_NAME={{ domain_name }}
-                - SECRET_KEY={{ secret_key }}
-                - REDIS_PASSWORD={{ redis_password }}
+              secrets:
+                - source: turbogate_secret_key
+                  target: SECRET_KEY
               networks:
-                - turbogate_networkworkwork
+                - turbogate_network # Changed from 'turbogate_net'
               healthcheck:
                 test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
                 interval: 30s
@@ -84,14 +112,16 @@
               deploy:
                 replicas: 1
                 placement:
-                  constraints: [node.role == manager]
-              command: redis-server --requirepass {{ redis_password }}
+                  constraints: [node.role == manager] # Constrains Redis to run on manager node
+              command: redis-server --requirepass_file /run/secrets/redis_password
+              secrets:
+                - redis_password
               networks:
-                - turbogate_net
+                - turbogate_network # Changed from 'turbogate_net'
               volumes:
-                - redis_data:/data
+                - redis_data:/data # Persistent volume for Redis data
               healthcheck:
-                test: ["CMD", "redis-cli", "-a", "{{ redis_password }}", "ping"]
+                test: ["CMD", "redis-cli", "ping"]
                 interval: 10s
                 timeout: 3s
                 retries: 5
@@ -104,13 +134,13 @@
               deploy:
                 replicas: 1
                 placement:
-                  constraints: [node.role == manager]
+                  constraints: [node.role == manager] # Constrains Nginx to run on manager node
               volumes:
                 - /etc/nginx/sites-available/turbogate:/etc/nginx/conf.d/default.conf:ro
                 - /etc/letsencrypt:/etc/letsencrypt:ro
                 - nginx_logs:/var/log/nginx
               networks:
-                - turbogate_net
+                - turbogate_network # Changed from 'turbogate_net'
               depends_on:
                 - turbogate
 
@@ -121,29 +151,35 @@
               driver: local
 
           networks:
-            turbogate_network:
-              external: true
+            turbogate_network: # Changed from 'turbogate_net'
+              external: true # Indicates this network is created externally (by the 'Create Docker network' task)
+          
+          secrets:
+            turbogate_secret_key:
+              external: true # Indicates this secret is created externally (by the 'Create Docker secrets' task)
+            redis_password:
+              external: true # Indicates this secret is created externally
         dest: "{{ compose_file }}"
         owner: root
         group: root
         mode: '0644'
     
     - name: Deploy Docker stack
-      docker_stack:
+      community.docker.docker_stack:
         name: "{{ stack_name }}"
         compose:
           - "{{ compose_file }}"
         state: present
     
-    - name: Wait for services to be ready
-      pause:
+    - name: Wait for services to be ready (initial pause)
+      ansible.builtin.pause:
         seconds: 30
     
     - name: Check service status
-      command: docker service ls
+      ansible.builtin.command: docker service ls
       register: service_status
       changed_when: false
     
     - name: Display service status
-      debug:
+      ansible.builtin.debug:
         var: service_status.stdout_lines
