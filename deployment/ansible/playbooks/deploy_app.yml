@@ -40,6 +40,14 @@
       loop:
         - /opt/turbogate
 
+    - name: Debug secret item values before creation (for troubleshooting)
+      ansible.builtin.debug:
+        msg: "Secret Name: {{ item.name }}, Value: '{{ item.value }}', Base64 Encoded: '{{ item.value | b64encode }}'"
+      loop:
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
+        - { name: "redis_password", value: "{{ redis_password }}" }
+      # no_log: true # Re-add for production
+
     - name: Create Docker secrets
       community.docker.docker_secret:
         name: "{{ item.name }}"
