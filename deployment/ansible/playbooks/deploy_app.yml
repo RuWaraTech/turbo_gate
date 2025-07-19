@@ -31,11 +31,12 @@
       loop:
         - /opt/turbogate
     
-    - name: Create Docker network
+    - name: Ensure Docker network exists
       docker_network:
         name: turbogate_network
         driver: overlay
         attachable: yes
+        state: present
     
     - name: Create Docker Compose file for the entire stack
       copy:
