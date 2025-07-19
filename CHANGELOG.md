@@ -1,3 +1,9 @@
+## v0.5.1 (2025-07-19)
+
+### fix
+
+- Error: Duplicate output definition │ │   on outputs.tf line 5: │    5: output "floating_ip" { │ │ An output named "floating_ip" was already defined at main.tf:147,1-21. │ Output names must be unique within a module.
+
 ## v0.5.0 (2025-07-19)
 
 ### feat
