@@ -1,3 +1,9 @@
+## v0.7.0 (2025-07-19)
+
+### feat
+
+- integrate Terraform-generated Ansible inventory for CD pipeline
+
 ## v0.6.23 (2025-07-19)
 
 ### fix
