@@ -1,22 +1,25 @@
 - name: Setup Docker Swarm Cluster
   hosts: all
   become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3  # Set the correct Python interpreter
 
   tasks:
-    # Removed: No longer need to install ifupdown if using netplan
+    # Install system-level Python netaddr package (more reliable than pip)
+    - name: Install python3-netaddr system package
+      apt:
+        name: python3-netaddr
+        state: present
+        update_cache: yes
+      when: ansible_os_family == 'Debian'
 
-    # Install Python netaddr library
-    # Explicitly specify the pip executable to ensure it's installed for the correct Python interpreter
-    - name: Install Python netaddr library
+    # Fallback to pip installation if system package not available
+    - name: Install Python netaddr library via pip
       pip:
         name: netaddr
         state: present
-        executable: pip3 # Use pip3, which is commonly linked to Python 3
-      # Add a check for the Python interpreter path if it's not standard
-      # For example, if Ansible is using /usr/bin/python3, you might use:
-      # executable: /usr/bin/python3 -m pip
-      # Or if you know the exact path from the error message:
-      # executable: /opt/hostedtoolcache/Python/3.11.13/x64/bin/python -m pip
+        executable: pip3
+      when: ansible_os_family != 'Debian'
 
     # Configure floating IP interface (netplan)
     - name: Configure floating IP interface using Netplan
@@ -44,7 +47,7 @@
           - curl
           - gnupg
           - lsb-release
-          - python3-pip # Ensure python3-pip is installed for the pip module to work
+          - python3-pip
         state: present
         update_cache: yes
 
@@ -75,13 +78,13 @@
         state: present
         update_cache: yes
 
-    - name: Install Docker Python library
+    - name: Install Docker Python libraries
       pip:
         name:
           - docker
           - docker-compose
         state: present
-        executable: pip3 # Also ensure these are installed for the correct interpreter
+        executable: pip3
 
     - name: Ensure Docker service is running
       systemd:
