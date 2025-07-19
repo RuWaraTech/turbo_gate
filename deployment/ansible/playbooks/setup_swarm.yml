@@ -79,7 +79,9 @@
         nodes: true
       register: worker_swarm_status
       when: "'workers' in group_names" # Only run this on worker nodes
+      ignore_errors: true
 
+      
     - name: Debug worker_swarm_status (on workers)
       ansible.builtin.debug:
         msg: "{{ worker_swarm_status | to_nice_json }}"
