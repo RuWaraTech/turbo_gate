@@ -1,3 +1,9 @@
+## v0.7.2 (2025-07-19)
+
+### fix
+
+-  workers to join using managers internal ip
+
 ## v0.7.1 (2025-07-19)
 
 ### fix
