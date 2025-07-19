@@ -1,51 +1,9 @@
 - name: Setup Docker Swarm Cluster
   hosts: all
   become: yes
-  vars:
-    ansible_python_interpreter: /usr/bin/python3
 
   tasks:
-    # Ensure Python and pip are properly installed
-    - name: Install Python and pip requirements
-      apt:
-        name:
-          - python3
-          - python3-pip
-          - python3-netaddr  # Install system package version if available
-        state: present
-        update_cache: yes
-      when: ansible_os_family == 'Debian'
-      register: python_install
-      ignore_errors: yes  # Continue if system package not available
-
-    - name: Debug Python installation
-      debug:
-        var: python_install
-
-    # Install netaddr via pip if system package not available
-    - name: Install netaddr via pip
-      pip:
-        name: netaddr
-        state: present
-        executable: pip3
-      when: python_install is failed or python_install.changed
-      register: pip_install
-
-    - name: Debug pip installation
-      debug:
-        var: pip_install
-
-    # Verify netaddr is importable
-    - name: Test netaddr import
-      command: "python3 -c 'import netaddr; print(netaddr.__version__)'"
-      register: netaddr_test
-      changed_when: false
-
-    - name: Show netaddr test results
-      debug:
-        var: netaddr_test
-
-    # Floating IP configuration
+    # Configure floating IP interface (netplan)
     - name: Configure floating IP interface using Netplan
       copy:
         content: |
@@ -56,15 +14,14 @@
                 addresses:
                   - {{ floating_ip }}/32
                   {% if ansible_all_ipv6_addresses is defined and ansible_all_ipv6_addresses | length > 0 %}
-                  - "{{ ansible_all_ipv6_addresses[0] | ansible.utils.ipaddr('network') }}::2/64"
+                  - "{{ ansible_all_ipv6_addresses[0] | regex_replace('/\d+$', '') }}::2/64"
                   {% endif %}
         dest: /etc/netplan/60-my-floating-ip.yaml
         mode: '0644'
       notify: apply netplan configuration
       when: floating_ip is defined
 
-    # Docker installation
-    - name: Install Docker prerequisites
+    - name: Install required packages
       apt:
         name:
           - apt-transport-https
@@ -72,10 +29,11 @@
           - curl
           - gnupg
           - lsb-release
+          - python3-pip
         state: present
         update_cache: yes
 
-    - name: Create Docker GPG key directory
+    - name: Create directory for Docker GPG key
       file:
         path: /etc/apt/keyrings
         state: directory
@@ -92,7 +50,7 @@
         repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
 
-    - name: Install Docker components
+    - name: Install Docker
       apt:
         name:
           - docker-ce
@@ -102,12 +60,12 @@
         state: present
         update_cache: yes
 
-    - name: Install Docker Python SDK
+    - name: Install Docker Python library
       pip:
         name:
           - docker
           - docker-compose
-        executable: pip3
+        state: present
 
     - name: Ensure Docker service is running
       systemd:
@@ -115,7 +73,6 @@
         state: started
         enabled: yes
 
-    # Swarm configuration
     - name: Initialize Swarm on manager
       docker_swarm:
         state: present
@@ -123,7 +80,7 @@
       when: swarm_role == "manager"
       register: swarm_info
 
-    - name: Get worker join token
+    - name: Get join token for workers
       set_fact:
         worker_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
       when:
