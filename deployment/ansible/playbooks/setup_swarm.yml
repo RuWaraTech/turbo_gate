@@ -77,20 +77,30 @@
       retries: 3
       delay: 60
 
-    # Verification tasks
-    - name: Get docker swarm info
-      docker_swarm_info:
-      register: swarm_info
-      changed_when: false
-      when: "'manager' in group_names"
+    - name: Verify Docker Swarm status (minimal check)
+      block:
+        - name: Check if swarm is active
+          command: docker info | grep -E "Swarm|Node Address"
+          register: swarm_check
+          changed_when: false
+          ignore_errors: yes
+          when: "'manager' in group_names"
 
-    - name: Display swarm status
-      debug:
-        msg:
-          - "Node ID: {{ swarm_info.docker_node_id | default('Not in swarm') }}"
-          - "Swarm State: {{ swarm_info.docker_swarm_active }}"
-          - "Node Address: {{ swarm_info.docker_node_addr | default('N/A') }}"
+        - name: List swarm nodes
+          command: docker node ls
+          register: node_list
+          changed_when: false
+          when: "'manager' in group_names"
 
+        - name: Show swarm status
+          debug:
+            msg:
+              - "Swarm Status: {{ swarm_check.stdout_lines | select('match', 'Swarm') | first | default('Swarm: inactive') }}"
+              - "Node Address: {{ swarm_check.stdout_lines | select('match', 'Node Address') | first | default('N/A') }}"
+              - "Node List:"
+              - "{{ node_list.stdout }}"
+          when: "'manager' in group_names"
+          
     # Only on manager: set up initial swarm services
     - name: Create overlay network for applications
       docker_network:
