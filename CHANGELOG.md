@@ -1,3 +1,9 @@
+## v0.6.1 (2025-07-19)
+
+### fix
+
+- assigning the floating ip
+
 ## v0.6.0 (2025-07-19)
 
 ### feat
