@@ -3,7 +3,7 @@
   become: yes
 
   tasks:
-    # -- NEW TASK ADDED HERE --
+   
     - name: Configure floating IP interface
       copy:
         content: |
@@ -68,7 +68,7 @@
     - name: Initialize Swarm on manager
       docker_swarm:
         state: present
-        # -- THIS LINE WAS MODIFIED --
+
         advertise_addr: "{{ floating_ip }}"
       when: swarm_role == "manager"
       register: swarm_info
@@ -87,7 +87,7 @@
         - swarm_role == "worker"
         - groups['swarm_workers'] | length > 0
 
-  # -- NEW HANDLERS BLOCK ADDED HERE --
+
   handlers:
     - name: restart networking
       service:
