@@ -1,3 +1,9 @@
+## v0.4.16 (2025-07-19)
+
+### fix
+
+- passing the SSH_PRIVATE_KEY to TF Plan
+
 ## v0.4.15 (2025-07-19)
 
 ## v0.4.14 (2025-07-18)
