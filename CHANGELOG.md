@@ -1,3 +1,9 @@
+## v0.6.0 (2025-07-19)
+
+### feat
+
+- assigning  manager the floating ip
+
 ## v0.5.2 (2025-07-19)
 
 ### fix
