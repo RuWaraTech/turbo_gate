@@ -1,3 +1,9 @@
+## v0.7.19 (2025-07-19)
+
+### fix
+
+- swarm_managers renaming
+
 ## v0.7.18 (2025-07-19)
 
 ### fix
