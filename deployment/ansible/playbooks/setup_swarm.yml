@@ -7,7 +7,7 @@
     swarm_advertise_addr: "{{ internal_ip }}"
     swarm_listen_addr: "{{ internal_ip }}:2377"
     join_retries: 3
-    join_retry_delay: 10 # Increased from 5 to 10 seconds for better stability
+    join_retry_delay: 10
 
   tasks:
     - name: Install Docker using official script
@@ -15,150 +15,178 @@
         url: https://get.docker.com
         dest: /tmp/get-docker.sh
         mode: '0755'
-      changed_when: false # This task itself doesn't change system state directly
+      changed_when: false
+
+    - name: Check if Docker is already installed
+      ansible.builtin.command: docker --version
+      register: docker_check
+      failed_when: false
+      changed_when: false
 
     - name: Execute Docker installation script
       ansible.builtin.command: /tmp/get-docker.sh
-      args:
-        removes: /tmp/get-docker.sh # Idempotent: don't re-run if script is gone (implies Docker is installed)
-      # Consider adding a check if Docker is already installed:
-      # changed_when: "install_docker_result.rc != 0"
-      # register: install_docker_result
-      # failed_when: "install_docker_result.rc != 0"
+      when: docker_check.rc != 0
+      register: install_docker_result
+
+    - name: Clean up Docker installation script
+      ansible.builtin.file:
+        path: /tmp/get-docker.sh
+        state: absent
 
     - name: Ensure Docker service is running and enabled
       ansible.builtin.systemd:
         name: docker
         state: started
         enabled: yes
-        daemon_reload: yes # Crucial for systemd to pick up changes
+        daemon_reload: yes
 
     - name: Install required Python packages for Docker modules
       ansible.builtin.pip:
         name:
-          - docker # The 'docker' Python SDK for the Docker modules
-          - docker-compose # docker-compose is usually for the CLI, not strictly required for swarm, but kept
-          - jsondiff # Not typically required for Docker modules, but kept if you use it elsewhere
+          - docker
+          - docker-compose
+          - jsondiff
         state: present
 
-    - name: Configure non-root Docker access for {{ ansible_user | default('ubuntu') }}
+    - name: Configure non-root Docker access for {{ ansible_user | default('root') }}
       ansible.builtin.user:
-        name: "{{ ansible_user | default('ubuntu') }}"
+        name: "{{ ansible_user | default('root') }}"
         groups: docker
         append: yes
-      # NOTE: For this to take effect for the current SSH session,
-      # the user might need to log out and back in, or run 'newgrp docker'.
-      # Ansible's next connection should use the new group.
-      become: true # Ensure elevated privileges for user modification
+      when: ansible_user is defined and ansible_user != 'root'
+
+    - name: Check current swarm status
+      community.docker.docker_swarm_info:
+      register: swarm_info
+      ignore_errors: true
 
     - name: Initialize Docker Swarm on manager node
       community.docker.docker_swarm:
         state: present
         advertise_addr: "{{ swarm_advertise_addr }}"
         listen_addr: "{{ swarm_listen_addr }}"
-        # force: yes # Use with extreme caution. Forces re-initialization, potentially destroying existing services.
-                    # Remove it unless you explicitly want to reset a swarm on every run.
-      when: "'swarm_managers' in group_names" # Changed from 'manager'
+      when: 
+        - "'swarm_managers' in group_names"
+        - not (swarm_info.docker_swarm_active | default(false))
       register: swarm_init
       retries: 3
-      delay: 5 # Retry if there are temporary issues during swarm init
+      delay: 5
 
     - name: Store swarm tokens securely for other nodes to join
       ansible.builtin.set_fact:
         docker_worker_token: "{{ swarm_init.swarm_facts.JoinTokens.Worker }}"
         docker_manager_token: "{{ swarm_init.swarm_facts.JoinTokens.Manager }}"
+        cacheable: yes
       when:
-        - "'swarm_managers' in group_names" # Changed from 'manager'
+        - "'swarm_managers' in group_names"
         - swarm_init.swarm_facts is defined
-        - swarm_init.changed # Only set if swarm_init actually created/changed the swarm (i.e., new tokens generated)
-      no_log: true # IMPORTANT: Prevents sensitive tokens from appearing in logs
+        - swarm_init.changed
+      no_log: true
 
-    # --- Worker Join Idempotency Check ---
-    - name: Check local Docker Swarm status on workers
+    - name: Retrieve existing swarm tokens if already initialized
+      block:
+        - name: Get worker join token
+          ansible.builtin.command: docker swarm join-token -q worker
+          register: worker_token_cmd
+          changed_when: false
+
+        - name: Get manager join token
+          ansible.builtin.command: docker swarm join-token -q manager
+          register: manager_token_cmd
+          changed_when: false
+
+        - name: Set token facts from existing swarm
+          ansible.builtin.set_fact:
+            docker_worker_token: "{{ worker_token_cmd.stdout }}"
+            docker_manager_token: "{{ manager_token_cmd.stdout }}"
+            cacheable: yes
+          no_log: true
+      when:
+        - "'swarm_managers' in group_names"
+        - swarm_info.docker_swarm_active | default(false)
+        - not (swarm_init.changed | default(false))
+
+    # Worker Join Section
+    - name: Check Docker Swarm status on workers
       community.docker.docker_swarm_info:
-        nodes: true
       register: worker_swarm_status
-      when: "'workers' in group_names" # Only run this on worker nodes
+      when: "'workers' in group_names"
       ignore_errors: true
 
-      
-    - name: Debug worker_swarm_status (on workers)
+    - name: Debug worker swarm status
       ansible.builtin.debug:
-        msg: "{{ worker_swarm_status | to_nice_json }}"
-      when: "'workers' in group_names" # Only debug on workers
+        msg: 
+          - "Swarm active: {{ worker_swarm_status.docker_swarm_active | default(false) }}"
+          - "Failed: {{ worker_swarm_status.failed | default(false) }}"
+      when: "'workers' in group_names"
 
     - name: Verify manager's swarm port is open for workers to join
       ansible.builtin.wait_for:
-        host: "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}" # Changed from 'manager'
+        host: "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}"
         port: 2377
         state: started
         delay: 5
-        timeout: 120 # Increased timeout for cloud environments
+        timeout: 120
       when:
         - "'workers' in group_names"
-        - not worker_swarm_status.docker_swarm_active # <<< ONLY WAIT IF WORKER IS NOT ALREADY ACTIVE
-      delegate_to: localhost # Run this check from the Ansible control node
+        - worker_swarm_status.failed | default(false) or not (worker_swarm_status.docker_swarm_active | default(false))
+      delegate_to: localhost
 
     - name: Join workers to swarm
       community.docker.docker_swarm:
         state: join
         advertise_addr: "{{ swarm_advertise_addr }}"
-        join_token: "{{ hostvars[groups['swarm_managers'][0]]['docker_worker_token'] }}" # Changed from 'manager'
+        join_token: "{{ hostvars[groups['swarm_managers'][0]]['docker_worker_token'] }}"
         remote_addrs:
-          - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377" # Changed from 'manager'
+          - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
       when:
         - "'workers' in group_names"
-        - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined # Changed from 'manager'
-        - not worker_swarm_status.docker_swarm_active # <<< ONLY JOIN IF WORKER IS NOT ALREADY ACTIVE
+        - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined
+        - worker_swarm_status.failed | default(false) or not (worker_swarm_status.docker_swarm_active | default(false))
       retries: "{{ join_retries }}"
       delay: "{{ join_retry_delay }}"
       register: join_result
       until: join_result is succeeded
-      # changed_when: false # Uncomment if you don't want this task to report 'changed' on subsequent runs if already joined
 
-    # --- Manager Swarm Status Validation ---
+    # Manager Validation Section
     - name: Validate swarm status on manager node
       block:
         - name: Get Docker Swarm cluster-level facts
           community.docker.docker_swarm_info:
           register: cluster_info
-          when: "'swarm_managers' in group_names" # Changed from 'manager'
 
-        - name: Get Docker Swarm node-level facts (for all nodes)
+        - name: Get Docker Swarm node-level facts
           community.docker.docker_swarm_info:
-            nodes: true # Crucial: Request node-specific information
+            nodes: true
           register: node_facts
-          when: "'swarm_managers' in group_names" # Changed from 'manager'
 
-        - name: Debug 'cluster_info' (overall swarm details)
+        - name: Display cluster info
           ansible.builtin.debug:
             msg: "{{ cluster_info | to_nice_json }}"
-          when: "'swarm_managers' in group_names" # Changed from 'manager'
+          when: ansible_verbosity > 0
 
-        - name: Debug 'node_facts' (specific node states)
+        - name: Display node facts
           ansible.builtin.debug:
             msg: "{{ node_facts | to_nice_json }}"
-          when: "'swarm_managers' in group_names" # Changed from 'manager'
+          when: ansible_verbosity > 0
 
         - name: Set fact for the local manager node's details
           ansible.builtin.set_fact:
             local_manager_node: "{{ node_facts.nodes | selectattr('Hostname', 'equalto', ansible_hostname) | first }}"
           when:
-            - "'swarm_managers' in group_names" # Changed from 'manager'
             - node_facts.nodes is defined
-            - node_facts.nodes | length > 0 # Ensure there are nodes to select from
+            - node_facts.nodes | length > 0
 
-        - name: Assert local manager node is healthy and leader
+        - name: Assert manager node is healthy
           ansible.builtin.assert:
             that:
               - local_manager_node.Status == "ready"
               - local_manager_node.ManagerStatus is defined
-              - local_manager_node.ManagerStatus == "Leader"
-            fail_msg: "Swarm manager node '{{ ansible_hostname }}' is not in a healthy state or is not the leader. Current node Status: {{ local_manager_node.Status | default('N/A') }}, Manager Status: {{ local_manager_node.ManagerStatus | default('N/A') }}"
+              - local_manager_node.ManagerStatus.Reachability in ["reachable", "leader"] or local_manager_node.ManagerStatus == "Leader"
+            fail_msg: "Swarm manager node '{{ ansible_hostname }}' is not healthy. Status: {{ local_manager_node.Status | default('N/A') }}, Manager Status: {{ local_manager_node.ManagerStatus | default('N/A') }}"
             success_msg: "Swarm manager node '{{ ansible_hostname }}' is active and healthy."
-          when: "'swarm_managers' in group_names and local_manager_node is defined" # Changed from 'manager'
-
-      when: "'swarm_managers' in group_names" # Changed from 'manager'
+          when: local_manager_node is defined
+      when: "'swarm_managers' in group_names"
 
     - name: Create overlay network for services
       community.docker.docker_network:
@@ -166,19 +194,17 @@
         driver: overlay
         attachable: yes
         driver_options:
-          encrypted: "true" # Encrypts traffic on this overlay network
-      when: "'swarm_managers' in group_names" # Changed from 'manager'
+          encrypted: "true"
+      when: "'swarm_managers' in group_names"
 
     - name: Display swarm connection information summary
       ansible.builtin.debug:
         msg: |
           SWARM DEPLOYMENT SUCCESSFUL
           ===========================
-          Manager Node: {{ groups['swarm_managers'][0] | default('N/A') }} # Changed from 'manager'
-          Internal IP (Manager): {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] | default('N/A') }} # Changed from 'manager'
-          Swarm Worker Join Command (example): docker swarm join --token <token> <manager_ip>:2377
-          (Tokens are secured and should be retrieved from the manager using 'docker swarm join-token worker' if needed)
+          Manager Node: {{ groups['swarm_managers'][0] | default('N/A') }}
+          Internal IP (Manager): {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] | default('N/A') }}
           Overlay Network: turbogate_network
-          Total Swarm Nodes (based on inventory groups): {{ groups['swarm_managers']|length + groups['workers']|length }} # Changed from 'manager'
-      when: "'swarm_managers' in group_names" # Changed from 'manager'
-      run_once: true # Ensures this message is displayed only once from the first manager.
+          Total Swarm Nodes: {{ groups['swarm_managers']|length + groups['workers']|length }}
+      when: "'swarm_managers' in group_names"
+      run_once: true

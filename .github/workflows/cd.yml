@@ -1,11 +1,11 @@
 name: Deploy to Production
 
 on:
-  workflow_run:
-    workflows: ["Bump Version and Create Release"]
-    types:
-      - completed
-    branches: [main]
+  # workflow_run:
+    # workflows: ["Bump Version and Create Release"]
+    # types:
+      # - completed
+    branches: ["*"]
   
   workflow_dispatch:
     inputs:
