@@ -37,7 +37,7 @@
         name: docker
 
     - name: Check swarm status via docker CLI
-      ansible.builtin.command: docker info --format '{{.Swarm.LocalNodeState}}'
+      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
       register: swarm_state
       failed_when: false
       changed_when: false
@@ -47,10 +47,6 @@
         state: present
         advertise_addr: "{{ swarm_advertise_addr }}"
         listen_addr: "{{ swarm_listen_addr }}"
-        default_addr_pool:
-          - base: 10.10.0.0/16
-            size: 24
-        subnet_size: 24
       when:
         - "'swarm_managers' in group_names"
         - swarm_state.stdout != "active"
@@ -84,9 +80,6 @@
         join_token: "{{ hostvars[groups['swarm_managers'][0]]['docker_worker_token'] }}"
         remote_addrs:
           - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
-      retries: 3
-      delay: 10
-      until: swarm_state.stdout == "active"
       when:
         - "'workers' in group_names"
         - swarm_state.stdout != "active"
@@ -98,25 +91,4 @@
         attachable: yes
         driver_options:
           encrypted: "true"
-        ipam_options:
-          driver: default
-          config:
-            - subnet: "10.10.0.0/24"
-              gateway: "10.10.0.1"
       when: "'swarm_managers' in group_names"
-
-    - name: Label manager node
-      community.docker.docker_node:
-        hostname: "{{ ansible_hostname }}"
-        labels:
-          role: "manager"
-          app: "turbogate"
-      when: "'swarm_managers' in group_names"
-
-    - name: Label worker nodes
-      community.docker.docker_node:
-        hostname: "{{ ansible_hostname }}"
-        labels:
-          role: "worker"
-          app: "turbogate"
-      when: "'workers' in group_names"
