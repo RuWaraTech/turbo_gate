@@ -80,8 +80,8 @@
       register: stack_removed
 
     - name: Wait for stack removal to complete
-      ansible.builtin.pause:
-        seconds: 15
+      ansible.builtin.wait_for:
+        timeout: 60
       when: stack_removed.changed | default(false)
     
     - name: Deploy Docker stack
@@ -97,20 +97,19 @@
         seconds: 30
     
     - name: Verify service deployment
-      ansible.builtin.command: |
-        set -e
-        docker service inspect {{ stack_name }}_turbogate --format '{{ '{{' }}.ID{{ '}}' }}'
-        docker service inspect {{ stack_name }}_redis --format '{{ '{{' }}.ID{{ '}}' }}'
+      ansible.builtin.shell: |
+        docker service inspect {{ stack_name }}_turbogate --format '{{ '{{' }}.ID{{ '}}' }}' && \
+        docker service inspect {{ stack_name }}_redis --format '{{ '{{' }}.ID{{ '}}' }}' && \
         docker service inspect {{ stack_name }}_nginx --format '{{ '{{' }}.ID{{ '}}' }}'
       register: service_deployment
-      retries: 3
-      delay: 10
+      retries: 5
+      delay: 15
       until: service_deployment.rc == 0
       changed_when: false
     
     - name: Check service status
-      ansible.builtin.command: |
-        docker service ls --format "table {{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}\t{{ '{{' }}.Mode{{ '}}' }}"
+      ansible.builtin.shell: |
+        docker service ls --filter "name={{ stack_name }}_" --format "table {{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}\t{{ '{{' }}.Mode{{ '}}' }}"
         echo "=== Detailed Status ==="
         docker service ps {{ stack_name }}_turbogate --no-trunc
         docker service ps {{ stack_name }}_redis --no-trunc
@@ -123,7 +122,7 @@
         var: service_status.stdout_lines
     
     - name: Verify all services are running
-      ansible.builtin.command: |
+      ansible.builtin.shell: |
         docker service ps {{ stack_name }}_{{ item }} \
           --format '{{ '{{' }}.Name{{ '}}' }}: {{ '{{' }}.CurrentState{{ '}}' }}' \
           --filter 'desired-state=running'
@@ -137,12 +136,11 @@
     
     - name: Display service health
       ansible.builtin.debug:
-        msg: "{{ item.item }}: {{ item.stdout }}"
+        msg: "{{ item.item }} service state: {{ item.stdout | default('Not available') }}"
       loop: "{{ service_health.results }}"
-      when: item.stdout is defined
     
     - name: Verify service health endpoints
-      ansible.builtin.command: |
+      ansible.builtin.shell: |
         curl -sSf http://localhost/health || exit 1
         docker exec $(docker ps -q -f name={{ stack_name }}_turbogate) \
           curl -sSf http://localhost:5000/gateway/health || exit 1
@@ -150,6 +148,6 @@
           redis-cli --no-auth-warning -a $(cat /run/secrets/redis_password) ping || exit 1
       register: health_check
       retries: 5
-      delay: 10
+      delay: 15
       until: health_check.rc == 0
       changed_when: false
