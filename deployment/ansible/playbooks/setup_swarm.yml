@@ -21,7 +21,9 @@
           - python3-pip
           - netcat
           - jq
+          - jsondiff
         state: present
+    
 
     - name: Check if Docker is already installed
       ansible.builtin.command: docker --version
@@ -58,6 +60,7 @@
     - name: Install Python Docker module
       ansible.builtin.pip:
         name: 
+          - jsondiff
           - docker>=6.0.0
         state: present
 
