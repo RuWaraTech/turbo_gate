@@ -38,7 +38,7 @@ services:
         target: SECRET_KEY
         mode: 0400
       - source: redis_password
-        target: redis_password
+        target: REDIS_PASSWORD
         mode: 0400
     networks:
       - turbogate_network
@@ -71,7 +71,7 @@ services:
     command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
     secrets:
       - source: redis_password
-        target: redis_password
+        target: REDIS_PASSWORD
         mode: 0400
     networks:
       - turbogate_network

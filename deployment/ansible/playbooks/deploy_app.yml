@@ -49,7 +49,7 @@
         data: "{{ item.value | b64encode }}"
         state: present
       loop:
-        - { name: "SECRET_KEY", value: "{{ secret_key }}" }
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
       when: item.value is defined and item.value | length > 0
       no_log: false
