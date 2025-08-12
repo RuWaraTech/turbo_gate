@@ -1,22 +1,15 @@
 ---
-- name: Setup Docker Swarm Cluster on Hetzner Cloud
+- name: Install Docker on all nodes
   hosts: all
   become: yes
-  gather_facts: yes
-  vars:
-    swarm_advertise_addr: "{{ internal_ip }}"
-    swarm_listen_addr: "{{ internal_ip }}:2377"
-    join_retries: 3
-    join_retry_delay: 10
-
   tasks:
-    - name: Install Docker using official script
+    - name: Download Docker install script
       ansible.builtin.get_url:
         url: https://get.docker.com
         dest: /tmp/get-docker.sh
         mode: '0755'
 
-    - name: Install Docker if not present
+    - name: Install Docker
       ansible.builtin.command: /tmp/get-docker.sh
       args:
         creates: /usr/bin/docker
@@ -26,7 +19,7 @@
         path: /tmp/get-docker.sh
         state: absent
 
-    - name: Ensure Docker service is running
+    - name: Enable and start Docker
       ansible.builtin.systemd:
         name: docker
         state: started
@@ -36,59 +29,63 @@
       ansible.builtin.pip:
         name: docker
 
-    - name: Check swarm status via docker CLI
+
+- name: Initialize Swarm on manager
+  hosts: swarm_managers
+  become: yes
+  tasks:
+    - name: Check swarm status
       ansible.builtin.command: docker info --format '{{.Swarm.LocalNodeState}}'
       register: swarm_state
-      failed_when: false
       changed_when: false
+      failed_when: false
 
-    - name: Initialize swarm on manager
+    - name: Init swarm if not active
       community.docker.docker_swarm:
         state: present
-        advertise_addr: "{{ swarm_advertise_addr }}"
-        listen_addr: "{{ swarm_listen_addr }}"
-      when:
-        - "'swarm_managers' in group_names"
-        - swarm_state.stdout != "active"
-      register: swarm_init
+        advertise_addr: "{{ internal_ip }}"
+        listen_addr: "{{ internal_ip }}:2377"
+      when: swarm_state.stdout != "active"
 
-    - name: Get worker join token from manager
+    - name: Get worker join token
       ansible.builtin.command: docker swarm join-token -q worker
       register: worker_token
       changed_when: false
-      when: "'swarm_managers' in group_names"
 
-    - name: Set worker token fact
+    - name: Save worker token to hostvars
       ansible.builtin.set_fact:
         docker_worker_token: "{{ worker_token.stdout }}"
-      when: "'swarm_managers' in group_names"
 
-    - name: Wait for manager swarm port
+
+- name: Join workers to swarm
+  hosts: workers
+  become: yes
+  tasks:
+    - name: Wait until manager swarm port is open
       ansible.builtin.wait_for:
         host: "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}"
         port: 2377
         state: started
         delay: 3
-        timeout: 60
-      when: "'workers' in group_names"
-      delegate_to: localhost
+        timeout: 120
 
-    - name: Join workers to swarm
-      community.docker.docker_swarm:
-        state: join
-        advertise_addr: "{{ swarm_advertise_addr }}"
-        join_token: "{{ hostvars[groups['swarm_managers'][0]]['docker_worker_token'] }}"
-        remote_addrs:
-          - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
-      when:
-        - "'workers' in group_names"
-        - swarm_state.stdout != "active"
+    - name: Check swarm status
+      ansible.builtin.command: docker info --format '{{.Swarm.LocalNodeState}}'
+      register: swarm_state
+      changed_when: false
+      failed_when: false
 
-    - name: Create overlay network (manager only)
-      community.docker.docker_network:
-        name: turbogate_network
-        driver: overlay
-        attachable: yes
-        driver_options:
-          encrypted: "true"
-      when: "'swarm_managers' in group_names"
+    - name: Join the swarm with retries
+      ansible.builtin.retry:
+        until: swarm_state.stdout == "active"
+        retries: 5
+        delay: 5
+      block:
+        - name: Join swarm
+          community.docker.docker_swarm:
+            state: join
+            advertise_addr: "{{ internal_ip }}"
+            join_token: "{{ hostvars[groups['swarm_managers'][0]]['docker_worker_token'] }}"
+            remote_addrs:
+              - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
+          when: swarm_state.stdout != "active"
