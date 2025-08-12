@@ -28,7 +28,7 @@ services:
           cpus: '0.25'
           memory: 256M
     environment:
-      - FLASK_ENV=prod
+      - FLASK_ENV=dev
       - REDIS_URL=redis://redis:6379/0
       - LOG_LEVEL=INFO
       - DOMAIN_NAME={{ domain_name }}
