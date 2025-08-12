@@ -1,4 +1,3 @@
----
 - name: Setup Docker Swarm Cluster on Hetzner Cloud
   hosts: all
   become: yes
@@ -55,8 +54,8 @@
         advertise_addr: "{{ swarm_advertise_addr }}"
         listen_addr: "{{ swarm_listen_addr }}"
         default_addr_pool:
-          - base: "10.10.0.0/16"
-            size: 24
+          - "10.10.0.0/16"
+        subnet_size: 24
       when:
         - "'swarm_managers' in group_names"
         - swarm_state.stdout != "active"
