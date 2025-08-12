@@ -35,13 +35,13 @@
       register: existing_secrets
       changed_when: false
 
-    - name: Remove existing secrets if they exist
-      ansible.builtin.command: docker secret rm {{ item.name }}
-      loop:
-        - { name: "turbogate_secret_key" }
-        - { name: "redis_password" }
-      when: item.name in existing_secrets.stdout_lines
-      ignore_errors: true
+    # - name: Remove existing secrets if they exist
+    #   ansible.builtin.command: docker secret rm {{ item.name }}
+    #   loop:
+    #     - { name: "turbogate_secret_key" }
+    #     - { name: "redis_password" }
+    #   when: item.name in existing_secrets.stdout_lines
+    #   ignore_errors: true
 
     - name: Create Docker secrets
       community.docker.docker_secret:
@@ -52,7 +52,7 @@
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
       when: item.value is defined and item.value | length > 0
-      no_log: true
+      no_log: false
     
     - name: Verify overlay network exists
       community.docker.docker_network:
