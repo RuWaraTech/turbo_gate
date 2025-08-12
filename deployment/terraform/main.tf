@@ -21,7 +21,7 @@ resource "hcloud_network_subnet" "main" {
   ip_range     = "10.0.1.0/24"
 }
 
-# Firewall
+# Firewall - Enhanced for Docker Swarm
 resource "hcloud_firewall" "main" {
   name = "turbogate-firewall"
   
@@ -46,12 +46,13 @@ resource "hcloud_firewall" "main" {
     source_ips = ["0.0.0.0/0", "::/0"]
   }
   
-  # Docker Swarm ports - Internal only
+  # Docker Swarm ports - Enhanced rules
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = "2377"
     source_ips = ["10.0.0.0/16"]
+    description = "Docker Swarm manager API"
   }
   
   rule {
@@ -59,6 +60,7 @@ resource "hcloud_firewall" "main" {
     protocol   = "tcp"
     port       = "7946"
     source_ips = ["10.0.0.0/16"]
+    description = "Container network discovery"
   }
   
   rule {
@@ -66,6 +68,7 @@ resource "hcloud_firewall" "main" {
     protocol   = "udp"
     port       = "7946"
     source_ips = ["10.0.0.0/16"]
+    description = "Container network discovery"
   }
   
   rule {
@@ -73,10 +76,19 @@ resource "hcloud_firewall" "main" {
     protocol   = "udp"
     port       = "4789"
     source_ips = ["10.0.0.0/16"]
+    description = "Overlay network traffic"
+  }
+  
+  # Additional rule for ICMP (ping)
+  rule {
+    direction  = "in"
+    protocol   = "icmp"
+    source_ips = ["10.0.0.0/16"]
+    description = "Internal network ping"
   }
 }
 
-# Manager Node
+# Manager Node - Enhanced user_data for Docker Swarm
 resource "hcloud_server" "manager" {
   name        = "turbogate-manager"
   image       = "ubuntu-22.04"
@@ -93,7 +105,10 @@ resource "hcloud_server" "manager" {
   user_data = <<-EOF
     #!/bin/bash
     apt-get update
-    apt-get install -y python3 python3-pip
+    apt-get install -y python3 python3-pip net-tools
+    echo "10.0.1.10 turbogate-manager" >> /etc/hosts
+    echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
+    echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
   EOF
   
   labels = {
@@ -102,7 +117,7 @@ resource "hcloud_server" "manager" {
   }
 }
 
-# Worker Nodes
+# Worker Nodes - Enhanced user_data
 resource "hcloud_server" "worker" {
   count       = 2
   name        = "turbogate-worker-${count.index + 1}"
@@ -120,7 +135,10 @@ resource "hcloud_server" "worker" {
   user_data = <<-EOF
     #!/bin/bash
     apt-get update
-    apt-get install -y python3 python3-pip
+    apt-get install -y python3 python3-pip net-tools
+    echo "10.0.1.10 turbogate-manager" >> /etc/hosts
+    echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
+    echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
   EOF
   
   labels = {
@@ -134,7 +152,6 @@ resource "hcloud_floating_ip" "main" {
   type          = "ipv4"
   home_location = var.location
   description   = "TurboGate Floating IP"
-  # Note: firewall_ids is not a valid argument for floating IPs
 }
 
 # Auto-assign floating IP to manager
@@ -143,6 +160,7 @@ resource "hcloud_floating_ip_assignment" "main" {
   server_id      = hcloud_server.manager.id
 }
 
+# Generate Ansible inventory
 resource "local_file" "ansible_inventory" {
   content = templatefile("${path.module}/../ansible/inventory/inventory.tpl", {
     manager_ip   = hcloud_server.manager.ipv4_address
@@ -151,4 +169,15 @@ resource "local_file" "ansible_inventory" {
     floating_ip  = hcloud_floating_ip.main.ip_address
   })
   filename = "${path.module}/../ansible/inventory/production.yml"
+}
+
+# Output for debugging
+output "all_network_ips" {
+  value = {
+    manager_public = hcloud_server.manager.ipv4_address
+    manager_internal = [for net in hcloud_server.manager.network : net.ip][0]
+    workers_public = [for s in hcloud_server.worker : s.ipv4_address]
+    workers_internal = [for s in hcloud_server.worker : [for net in s.network : net.ip][0]]
+  }
+  description = "All network IPs for verification"
 }

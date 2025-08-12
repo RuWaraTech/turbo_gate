@@ -6,8 +6,8 @@
   vars:
     swarm_advertise_addr: "{{ internal_ip }}"
     swarm_listen_addr: "{{ internal_ip }}:2377"
-    join_retries: 3
-    join_retry_delay: 10
+    join_retries: 5
+    join_retry_delay: 15
 
   tasks:
     - name: Install Docker using official script
@@ -42,11 +42,21 @@
       failed_when: false
       changed_when: false
 
+    - name: Verify internal network connectivity
+      ansible.builtin.command: ping -c 3 {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}
+      register: ping_test
+      changed_when: false
+      failed_when: ping_test.rc != 0
+      when: "'workers' in group_names"
+
     - name: Initialize swarm on manager
       community.docker.docker_swarm:
         state: present
         advertise_addr: "{{ swarm_advertise_addr }}"
         listen_addr: "{{ swarm_listen_addr }}"
+        default_addr_pool:
+          - base: "10.10.0.0/16"
+            size: 24
       when:
         - "'swarm_managers' in group_names"
         - swarm_state.stdout != "active"
@@ -63,17 +73,20 @@
         docker_worker_token: "{{ worker_token.stdout }}"
       when: "'swarm_managers' in group_names"
 
-    - name: Wait for manager swarm port
+    - name: Wait for manager swarm port (with retries)
       ansible.builtin.wait_for:
         host: "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}"
         port: 2377
         state: started
-        delay: 3
-        timeout: 60
+        delay: 5
+        timeout: 120
       when: "'workers' in group_names"
       delegate_to: localhost
+      register: port_check
+      until: port_check is success
+      retries: 5
 
-    - name: Join workers to swarm
+    - name: Join workers to swarm (with retries)
       community.docker.docker_swarm:
         state: join
         advertise_addr: "{{ swarm_advertise_addr }}"
@@ -82,7 +95,19 @@
           - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
       when:
         - "'workers' in group_names"
-        - swarm_state.stdout != "active"
+        - swarm_state.stdout == "inactive"
+      register: join_result
+      retries: 5
+      delay: 15
+      until: join_result is success
+
+    - name: Verify swarm nodes
+      ansible.builtin.command: docker node ls
+      register: swarm_nodes
+      changed_when: false
+      failed_when: swarm_nodes.rc != 0
+      when: "'swarm_managers' in group_names"
+      delegate_to: "{{ groups['swarm_managers'][0] }}"
 
     - name: Create overlay network (manager only)
       community.docker.docker_network:
@@ -92,3 +117,11 @@
         driver_options:
           encrypted: "true"
       when: "'swarm_managers' in group_names"
+
+    - name: Label nodes
+      community.docker.docker_node:
+        hostname: "{{ ansible_hostname }}"
+        labels:
+          role: "{{ 'manager' if 'swarm_managers' in group_names else 'worker' }}"
+          app: "turbogate"
+      delegate_to: "{{ groups['swarm_managers'][0] }}"
