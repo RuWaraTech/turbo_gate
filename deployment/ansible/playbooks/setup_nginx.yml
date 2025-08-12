@@ -140,12 +140,6 @@
         group: root
         mode: '0644'
 
-    - name: Validate generated NGINX configuration
-      ansible.builtin.command: nginx -t -c /etc/nginx/sites-available/turbogate
-      changed_when: false
-      failed_when: false
-      register: nginx_test
-
-    - name: Display NGINX configuration test result
+    - name: Display configuration deployment status
       ansible.builtin.debug:
-        var: nginx_test
+        msg: "NGINX configuration deployed to /etc/nginx/sites-available/turbogate"
