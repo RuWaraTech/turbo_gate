@@ -175,7 +175,6 @@ jobs:
           echo "floating_ip=$(terraform output -raw floating_ip)" >> $GITHUB_OUTPUT
           echo "worker_ips=$(terraform output -json worker_ips)" >> $GITHUB_OUTPUT
       
-      # Upload the Terraform-generated inventory
       - name: 📦 Upload inventory artifact
         uses: actions/upload-artifact@v4
         with:
@@ -205,20 +204,13 @@ jobs:
       - name: 📦 Install Ansible
         run: |
           python -m pip install --upgrade pip
-          pip install ansible ansible-core
+          pip install ansible ansible-core docker
       
-      # Download the Terraform-generated inventory
       - name: 📥 Download inventory artifact
         uses: actions/download-artifact@v4
         with:
           name: ansible-inventory
           path: deployment/ansible/inventory/
-      
-      - name: 📝 Display inventory contents
-        working-directory: deployment/ansible
-        run: |
-          echo "Terraform-generated inventory:"
-          cat inventory/production.yml
       
       - name: 🔧 Setup Docker Swarm
         working-directory: deployment/ansible
