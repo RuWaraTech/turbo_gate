@@ -64,7 +64,7 @@ services:
         reservations:
           cpus: '0.1'
           memory: 128M
-    command: redis-server --requirepass-file /run/secrets/redis_password
+    command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
     secrets:
       - source: redis_password
         target: redis_password
