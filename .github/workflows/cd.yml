@@ -225,7 +225,7 @@ jobs:
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
-          ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml -vvv
+          ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml -v
       
       - name: 🔒 Setup NGINX with SSL
         working-directory: deployment/ansible
