@@ -63,7 +63,7 @@
     
     - name: Create Docker Compose file
       ansible.builtin.template:
-        src: templates/docker-compose.yml.j2
+        src: docker-compose.yml.j2
         dest: "{{ compose_file }}"
         owner: root
         group: root
