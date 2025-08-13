@@ -86,10 +86,6 @@ COPY --from=base --chown=app:app /usr/local/bin /usr/local/bin
 WORKDIR /gateway_app
 COPY --from=base --chown=app:app /gateway_app /gateway_app
 
-
-
-# Copy and set up entrypoint script (BEFORE switching to app user)
-
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -104,7 +100,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/gateway/health')" || exit 1
 
 
-
+ENTRYPOINT ["/entrypoint.sh"]
 # Use exec form for better signal handling
 CMD ["poetry", "run", "gunicorn", \
      "--bind", "0.0.0.0:5000", \
