@@ -10,6 +10,8 @@ services:
         delay: 10s
         order: start-first
         failure_action: rollback
+        monitor: 30s
+        max_failure_ratio: 0.1
       restart_policy:
         condition: on-failure
         delay: 5s
@@ -24,21 +26,21 @@ services:
           memory: 256M
     environment:
       - FLASK_ENV=prod
-      - REDIS_URL=redis://redis:6379/0
       - LOG_LEVEL=INFO
       - DOMAIN_NAME=${DOMAIN_NAME}
+      # Remove REDIS_URL - entrypoint.sh will create it with authentication
     secrets:
       - source: turbogate_secret_key
         target: SECRET_KEY
         mode: 0400
+      - source: redis_password
+        target: redis_password
+        mode: 0400
     networks:
       - turbogate_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
-      interval: 30s
-      timeout: 3s
-      retries: 3
-      start_period: 40s
+    # Remove healthcheck - let Dockerfile handle it
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
 
   redis:
     image: redis:7-alpine
@@ -51,7 +53,15 @@ services:
         condition: any
         delay: 5s
         max_attempts: 3
-    command: redis-server --requirepass-file /run/secrets/redis_password
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    # Fixed: Use proper Redis command with secret file
+    command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
     secrets:
       - source: redis_password
         target: redis_password
@@ -61,7 +71,8 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--no-auth-warning", "ping"]
+      # Fixed: Add authentication to health check
+      test: ["CMD", "sh", "-c", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -77,6 +88,13 @@ services:
         condition: any
         delay: 5s
         max_attempts: 3
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
     ports:
       - target: 80
         published: 80
@@ -118,7 +136,7 @@ networks:
   turbogate_network:
     driver: overlay
     attachable: true
-    driver_options:
+    driver_opts:
       encrypted: "true"
 
 secrets:

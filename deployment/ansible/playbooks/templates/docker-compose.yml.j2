@@ -28,17 +28,18 @@ services:
           cpus: '0.25'
           memory: 256M
     environment:
-      - FLASK_ENV=dev
-      - REDIS_URL=redis://redis:6379/0
+      - FLASK_ENV=prod
       - LOG_LEVEL=INFO
       - DOMAIN_NAME={{ domain_name }}
       - VERSION={{ version | default('unknown') }}
+      # REDIS_URL will be created by entrypoint.sh with authentication
+      # SECRET_KEY will be set by entrypoint.sh from secret file
     secrets:
       - source: turbogate_secret_key
         target: SECRET_KEY
         mode: 0400
       - source: redis_password
-        target: REDIS_PASSWORD
+        target: redis_password
         mode: 0400
     networks:
       - turbogate_network
@@ -65,7 +66,7 @@ services:
     command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
     secrets:
       - source: redis_password
-        target: REDIS_PASSWORD
+        target: redis_password
         mode: 0400
     networks:
       - turbogate_network

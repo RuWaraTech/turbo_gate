@@ -96,6 +96,9 @@ VOLUME /gateway_app/data
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/gateway/health')" || exit 1
 
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 # Use exec form for better signal handling
 CMD ["poetry", "run", "gunicorn", \
      "--bind", "0.0.0.0:5000", \
