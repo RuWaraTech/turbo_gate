@@ -6,49 +6,17 @@
   vars:
     stack_name: turbogate
     compose_file: /opt/turbogate/docker-compose.yml
-    health_check_timeout: 120
-    max_deployment_retries: 3
+    health_check_timeout: 60
 
-  pre_tasks:
+  tasks:
     - name: Validate required variables
       ansible.builtin.assert:
         that:
           - secret_key is defined
-          - secret_key | length >= 32
           - redis_password is defined
-          - redis_password | length >= 16
           - domain_name is defined
-          - image_tag is defined
-        fail_msg: "Required variables missing or invalid: secret_key (32+ chars), redis_password (16+ chars), domain_name, image_tag"
+        fail_msg: "Required variables (secret_key, redis_password, domain_name) must be defined"
 
-    - name: Pre-deployment infrastructure checks
-      block:
-        - name: Check Docker Swarm status
-          ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
-          register: swarm_status
-          failed_when: swarm_status.stdout != "active"
-          changed_when: false
-
-        - name: Check available disk space
-          ansible.builtin.shell: df -h / | awk 'NR==2 {print $4}' | sed 's/G//'
-          register: available_space
-          failed_when: available_space.stdout | float < 2.0
-          changed_when: false
-
-        - name: Check available memory
-          ansible.builtin.shell: free -m | awk 'NR==2{printf "%.0f", $7}'
-          register: available_memory
-          failed_when: available_memory.stdout | int < 1024
-          changed_when: false
-
-        - name: Display system resources
-          ansible.builtin.debug:
-            msg:
-              - "Swarm Status: {{ swarm_status.stdout }}"
-              - "Available Disk: {{ available_space.stdout }}G"
-              - "Available Memory: {{ available_memory.stdout }}MB"
-
-  tasks:
     - name: Create application directories
       ansible.builtin.file:
         path: "{{ item }}"
@@ -62,65 +30,37 @@
         - /var/lib/turbogate/redis
         - /var/log/turbogate/nginx
 
-    - name: Check existing Docker secrets
+    - name: Check if Docker secrets already exist
       ansible.builtin.command: docker secret ls --format '{{ '{{' }}.Name{{ '}}' }}'
       register: existing_secrets
       changed_when: false
 
-    - name: Debug existing secrets
-      ansible.builtin.debug:
-        msg: "Existing secrets: {{ existing_secrets.stdout_lines }}"
-
-    - name: Remove existing secrets if they exist
-      ansible.builtin.command: docker secret rm {{ item.name }}
-      loop:
-        - { name: "turbogate_secret_key" }
-        - { name: "redis_password" }
-      when: item.name in existing_secrets.stdout_lines
-      ignore_errors: true
-      register: secret_removal
-
-    - name: Wait for secret cleanup
-      ansible.builtin.pause:
-        seconds: 10
-      when: secret_removal is changed
+    # - name: Remove existing secrets if they exist
+    #   ansible.builtin.command: docker secret rm {{ item.name }}
+    #   loop:
+    #     - { name: "turbogate_secret_key" }
+    #     - { name: "redis_password" }
+    #   when: item.name in existing_secrets.stdout_lines
+    #   ignore_errors: true
 
     - name: Create Docker secrets
-      ansible.builtin.shell: |
-        echo -n "{{ item.value }}" | docker secret create {{ item.name }} -
+      community.docker.docker_secret:
+        name: "{{ item.name }}"
+        data: "{{ item.value | b64encode }}"
+        state: present
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
       when: item.value is defined and item.value | length > 0
-      no_log: true
-      register: secret_creation
-
-    - name: Verify secrets were created
-      ansible.builtin.command: docker secret inspect {{ item.name }} --format '{{ '{{' }}.Spec.Name{{ '}}' }}: Created'
-      loop:
-        - { name: "turbogate_secret_key" }
-        - { name: "redis_password" }
-      register: secret_verification
-      changed_when: false
-
-    - name: Verify secret creation was successful
-      ansible.builtin.assert:
-        that:
-          - "'Created' in item.stdout"
-        fail_msg: "Failed to create secret {{ item.item.name }}"
-      loop: "{{ secret_verification.results }}"
-      loop_control:
-        label: "{{ item.item.name }}"
-
+      no_log: false
+    
     - name: Verify overlay network exists
       community.docker.docker_network:
         name: turbogate_network
         driver: overlay
-        driver_options:
-          encrypted: "true"
         attachable: yes
         state: present
-
+    
     - name: Create Docker Compose file
       ansible.builtin.template:
         src: docker-compose.yml.j2
@@ -128,331 +68,86 @@
         owner: root
         group: root
         mode: '0644'
-        backup: yes
-      register: compose_file_created
-
-    - name: Backup current deployment info
-      ansible.builtin.shell: |
-        if docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}' | grep -q "^{{ stack_name }}$"; then
-          docker service ls --filter "name={{ stack_name }}_" \
-            --format "{{ '{{' }}.Name{{ '}}' }}:{{ '{{' }}.Image{{ '}}' }}" > /tmp/{{ stack_name }}_backup_deployment.txt
-          echo "Backup created"
-        else
-          echo "No existing deployment to backup"
-        fi
-      register: deployment_backup
-      changed_when: false
-
-    - name: Display backup info
-      ansible.builtin.debug:
-        msg: "{{ deployment_backup.stdout }}"
-
+    
     - name: Check if stack is already deployed
       ansible.builtin.command: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}'
       register: existing_stacks
       changed_when: false
 
     - name: Remove existing stack if present
-      block:
-        - name: Remove stack
-          ansible.builtin.command: docker stack rm {{ stack_name }}
-          when: stack_name in existing_stacks.stdout_lines
-          register: stack_removed
+      ansible.builtin.command: docker stack rm {{ stack_name }}
+      when: stack_name in existing_stacks.stdout_lines
+      register: stack_removed
 
-        - name: Wait for stack removal to complete
-          ansible.builtin.shell: |
-            while docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}' | grep -q "^{{ stack_name }}$"; do
-              echo "Waiting for stack removal..."
-              sleep 5
-            done
-            echo "Stack removed successfully"
-          when: stack_removed is changed
-          register: stack_removal_wait
-          timeout: 120
-
-        - name: Display stack removal status
-          ansible.builtin.debug:
-            msg: "{{ stack_removal_wait.stdout_lines | default(['No stack to remove']) }}"
-
-    - name: Deploy Docker stack with retry logic
-      block:
-        - name: Deploy stack
-          community.docker.docker_stack:
-            name: "{{ stack_name }}"
-            compose:
-              - "{{ compose_file }}"
-            state: present
-            prune: yes
-          register: stack_deployment
-          retries: "{{ max_deployment_retries }}"
-          delay: 30
-          until: stack_deployment is succeeded
-
-        - name: Wait for initial service startup
-          ansible.builtin.pause:
-            seconds: 45
-            prompt: "Waiting for services to initialize..."
-
-        - name: Verify service deployment
-          ansible.builtin.shell: |
-            services_ready=0
-            total_services=3
-            
-            for service in turbogate redis nginx; do
-              if docker service inspect {{ stack_name }}_${service} --format '{{ '{{' }}.ID{{ '}}' }}' >/dev/null 2>&1; then
-                echo "✅ Service ${service} exists"
-                ((services_ready++))
-              else
-                echo "❌ Service ${service} missing"
-              fi
-            done
-            
-            if [ $services_ready -eq $total_services ]; then
-              echo "All $total_services services deployed successfully"
-              exit 0
-            else
-              echo "Only $services_ready/$total_services services deployed"
-              exit 1
-            fi
-          register: service_verification
-          retries: 10
-          delay: 15
-          until: service_verification.rc == 0
-
-        - name: Check service status and replicas
-          ansible.builtin.shell: |
-            echo "=== SERVICE STATUS ==="
-            docker service ls --filter "name={{ stack_name }}_" --format "table {{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}\t{{ '{{' }}.Image{{ '}}' }}"
-            
-            echo -e "\n=== DETAILED SERVICE STATUS ==="
-            for service in {{ stack_name }}_turbogate {{ stack_name }}_redis {{ stack_name }}_nginx; do
-              echo "--- $service ---"
-              docker service ps $service --format "{{ '{{' }}.Name{{ '}}' }}: {{ '{{' }}.CurrentState{{ '}}' }} ({{ '{{' }}.Error{{ '}}' }})" --no-trunc | head -5
-            done
-          register: service_status
-          changed_when: false
-
-        - name: Display service status
-          ansible.builtin.debug:
-            msg: "{{ service_status.stdout_lines }}"
-
-        - name: Wait for all replicas to be running
-          ansible.builtin.shell: |
-            echo "Checking replica status..."
-            all_running=true
-            
-            for service in {{ stack_name }}_turbogate {{ stack_name }}_redis {{ stack_name }}_nginx; do
-              running=$(docker service ps $service --filter "desired-state=running" --format "{{ '{{' }}.CurrentState{{ '}}' }}" | grep -c "Running" || echo "0")
-              desired=$(docker service inspect $service --format "{{ '{{' }}.Spec.Mode.Replicated.Replicas{{ '}}' }}" || echo "1")
-              
-              echo "$service: $running/$desired replicas running"
-              
-              if [ "$running" -ne "$desired" ]; then
-                all_running=false
-              fi
-            done
-            
-            if [ "$all_running" = true ]; then
-              echo "✅ All services have desired replicas running"
-              exit 0
-            else
-              echo "❌ Not all replicas are running yet"
-              exit 1
-            fi
-          register: replica_check
-          retries: 20
-          delay: 15
-          until: replica_check.rc == 0
-
-      rescue:
-        - name: Deployment failed - gathering debug info
-          ansible.builtin.shell: |
-            echo "=== DEPLOYMENT FAILURE DEBUG ==="
-            echo "Stack status:"
-            docker stack ls
-            
-            echo -e "\nServices status:"
-            docker service ls --filter "name={{ stack_name }}_"
-            
-            echo -e "\nService logs (last 50 lines each):"
-            for service in {{ stack_name }}_turbogate {{ stack_name }}_redis {{ stack_name }}_nginx; do
-              if docker service ls --format '{{ '{{' }}.Name{{ '}}' }}' | grep -q "^$service$"; then
-                echo "--- $service logs ---"
-                docker service logs --tail 50 $service 2>/dev/null || echo "No logs available"
-              fi
-            done
-          register: debug_info
-          changed_when: false
-
-        - name: Display debug information
-          ansible.builtin.debug:
-            msg: "{{ debug_info.stdout_lines }}"
-
-        - name: Attempt rollback if backup exists
-          block:
-            - name: Check if backup deployment info exists
-              ansible.builtin.stat:
-                path: /tmp/{{ stack_name }}_backup_deployment.txt
-              register: backup_exists
-
-            - name: Rollback to previous deployment
-              ansible.builtin.shell: |
-                echo "Attempting rollback..."
-                docker stack rm {{ stack_name }}
-                sleep 30
-                # Deploy with previous compose file
-                if [ -f "{{ compose_file }}.backup" ]; then
-                  docker stack deploy -c {{ compose_file }}.backup {{ stack_name }}
-                  echo "Rollback initiated"
-                else
-                  echo "No backup compose file found"
-                fi
-              when: backup_exists.stat.exists
-              register: rollback_result
-
-            - name: Display rollback result
-              ansible.builtin.debug:
-                msg: "{{ rollback_result.stdout_lines | default(['Rollback not attempted']) }}"
-
-        - name: Fail deployment
-          ansible.builtin.fail:
-            msg: "Deployment failed after {{ max_deployment_retries }} attempts. Check debug output above."
-
-    - name: Comprehensive health checks
-      block:
-        - name: Test Redis connectivity
-          ansible.builtin.shell: |
-            redis_container=$(docker ps -q -f name={{ stack_name }}_redis | head -1)
-            if [ -n "$redis_container" ]; then
-              docker exec $redis_container sh -c 'redis-cli --no-auth-warning -a "$(cat /run/secrets/redis_password)" ping'
-            else
-              echo "Redis container not found"
-              exit 1
-            fi
-          register: redis_health
-          retries: 10
-          delay: 10
-          until: redis_health.stdout.find('PONG') != -1
-
-        - name: Test TurboGate application health
-          ansible.builtin.uri:
-            url: "http://localhost/gateway/health"
-            method: GET
-            status_code: 200
-            timeout: 10
-          register: app_health
-          retries: 15
-          delay: 10
-          until: app_health.status == 200
-
-        - name: Test Nginx proxy health
-          ansible.builtin.uri:
-            url: "http://localhost/health"
-            method: GET
-            status_code: [200, 301, 302]
-            timeout: 10
-          register: nginx_health
-          retries: 10
-          delay: 5
-          until: nginx_health.status in [200, 301, 302]
-
-        - name: Verify secret accessibility in containers
-          ansible.builtin.shell: |
-            turbogate_container=$(docker ps -q -f name={{ stack_name }}_turbogate | head -1)
-            if [ -n "$turbogate_container" ]; then
-              echo "Checking secrets in TurboGate container:"
-              docker exec $turbogate_container ls -la /run/secrets/
-              
-              echo "Verifying secret file sizes:"
-              docker exec $turbogate_container sh -c 'echo "SECRET_KEY size: $(stat -c%s /run/secrets/SECRET_KEY 2>/dev/null || echo "missing") bytes"'
-              docker exec $turbogate_container sh -c 'echo "redis_password size: $(stat -c%s /run/secrets/redis_password 2>/dev/null || echo "missing") bytes"'
-            else
-              echo "TurboGate container not found"
-              exit 1
-            fi
-          register: secret_check
-          changed_when: false
-
-        - name: Display secret check results
-          ansible.builtin.debug:
-            msg: "{{ secret_check.stdout_lines }}"
-
-        - name: Final deployment verification
-          ansible.builtin.shell: |
-            echo "=== FINAL DEPLOYMENT STATUS ==="
-            echo "Stack: {{ stack_name }}"
-            echo "Domain: {{ domain_name }}"
-            echo "Image Tag: {{ image_tag }}"
-            echo ""
-            
-            echo "Services:"
-            docker service ls --filter "name={{ stack_name }}_" --format "  ✅ {{ '{{' }}.Name{{ '}}' }}: {{ '{{' }}.Replicas{{ '}}' }} replicas"
-            
-            echo ""
-            echo "Health Status:"
-            echo "  ✅ Redis: {{ redis_health.stdout }}"
-            echo "  ✅ Application: HTTP {{ app_health.status }}"
-            echo "  ✅ Nginx: HTTP {{ nginx_health.status }}"
-            
-            echo ""
-            echo "Deployment completed successfully at $(date)"
-          register: final_status
-          changed_when: false
-
-        - name: Display final deployment status
-          ansible.builtin.debug:
-            msg: "{{ final_status.stdout_lines }}"
-
-      rescue:
-        - name: Health check failed
-          ansible.builtin.debug:
-            msg:
-              - "Health checks failed, but services are deployed"
-              - "Redis Health: {{ redis_health.stdout | default('FAILED') }}"
-              - "App Health: {{ app_health.status | default('FAILED') }}"
-              - "Nginx Health: {{ nginx_health.status | default('FAILED') }}"
-
-        - name: Display troubleshooting info
-          ansible.builtin.debug:
-            msg:
-              - "Troubleshooting steps:"
-              - "1. Check service logs: docker service logs {{ stack_name }}_turbogate"
-              - "2. Check service status: docker service ps {{ stack_name }}_turbogate"
-              - "3. Verify secrets: docker secret ls"
-              - "4. Check container access: docker exec -it <container> /bin/bash"
-
-  post_tasks:
-    - name: Create deployment summary
-      ansible.builtin.copy:
-        content: |
-          TurboGate Deployment Summary
-          ============================
-          Date: {{ ansible_date_time.iso8601 }}
-          Stack: {{ stack_name }}
-          Domain: {{ domain_name }}
-          Image Tag: {{ image_tag }}
-          
-          Services Deployed:
-          - {{ stack_name }}_turbogate: {{ app_replicas | default(2) }} replicas
-          - {{ stack_name }}_redis: 1 replica
-          - {{ stack_name }}_nginx: 1 replica
-          
-          Access URLs:
-          - Application: http://{{ domain_name }}/gateway/health
-          - Health Check: http://{{ domain_name }}/health
-          
-          Commands for monitoring:
-          - View services: docker service ls --filter "name={{ stack_name }}_"
-          - View logs: docker service logs {{ stack_name }}_turbogate
-          - Check secrets: docker secret ls
-        dest: /opt/turbogate/deployment_summary.txt
-        mode: '0644'
-
-    - name: Display access information
+    - name: Wait for stack removal to complete
+      ansible.builtin.wait_for:
+        timeout: 60
+      when: stack_removed.changed | default(false)
+    
+    - name: Deploy Docker stack
+      community.docker.docker_stack:
+        name: "{{ stack_name }}"
+        compose:
+          - "{{ compose_file }}"
+        state: present
+        prune: yes
+    
+    - name: Wait for services to be ready
+      ansible.builtin.pause:
+        seconds: 30
+    
+    - name: Verify service deployment
+      ansible.builtin.shell: |
+        docker service inspect {{ stack_name }}_turbogate --format '{{ '{{' }}.ID{{ '}}' }}' && \
+        docker service inspect {{ stack_name }}_redis --format '{{ '{{' }}.ID{{ '}}' }}' && \
+        docker service inspect {{ stack_name }}_nginx --format '{{ '{{' }}.ID{{ '}}' }}'
+      register: service_deployment
+      retries: 5
+      delay: 15
+      until: service_deployment.rc == 0
+      changed_when: false
+    
+    - name: Check service status
+      ansible.builtin.shell: |
+        docker service ls --filter "name={{ stack_name }}_" --format "table {{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}\t{{ '{{' }}.Mode{{ '}}' }}"
+        echo "=== Detailed Status ==="
+        docker service ps {{ stack_name }}_turbogate --no-trunc
+        docker service ps {{ stack_name }}_redis --no-trunc
+        docker service ps {{ stack_name }}_nginx --no-trunc
+      register: service_status
+      changed_when: false
+    
+    - name: Display service status
       ansible.builtin.debug:
-        msg:
-          - "🎉 Deployment completed successfully!"
-          - "🌐 Application URL: http://{{ domain_name }}"
-          - "🏥 Health Check: http://{{ domain_name }}/health"
-          - "📊 Monitor with: docker service ls --filter 'name={{ stack_name }}_'"
-          - "📝 Summary saved to: /opt/turbogate/deployment_summary.txt"
+        var: service_status.stdout_lines
+    
+    - name: Verify all services are running
+      ansible.builtin.shell: |
+        docker service ps {{ stack_name }}_{{ item }} \
+          --format '{{ '{{' }}.Name{{ '}}' }}: {{ '{{' }}.CurrentState{{ '}}' }}' \
+          --filter 'desired-state=running'
+      loop:
+        - turbogate
+        - redis
+        - nginx
+      register: service_health
+      changed_when: false
+      failed_when: false
+    
+    - name: Display service health
+      ansible.builtin.debug:
+        msg: "{{ item.item }} service state: {{ item.stdout | default('Not available') }}"
+      loop: "{{ service_health.results }}"
+    
+    - name: Verify service health endpoints
+      ansible.builtin.shell: |
+        curl -sSf http://localhost/health || exit 1
+        docker exec $(docker ps -q -f name={{ stack_name }}_turbogate) \
+          curl -sSf http://localhost:5000/gateway/health || exit 1
+        docker exec $(docker ps -q -f name={{ stack_name }}_redis) \
+          redis-cli --no-auth-warning -a $(cat /run/secrets/redis_password) ping || exit 1
+      register: health_check
+      retries: 5
+      delay: 15
+      until: health_check.rc == 0
+      changed_when: false
