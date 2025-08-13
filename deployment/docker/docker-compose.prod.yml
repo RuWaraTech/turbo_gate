@@ -4,7 +4,7 @@ services:
   turbogate:
     image: fwande/turbogate:${IMAGE_TAG:-latest}
     deploy:
-      replicas: 2
+      replicas: 4
       update_config:
         parallelism: 1
         delay: 10s
