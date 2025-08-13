@@ -171,6 +171,7 @@ jobs:
           TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
         run: |
           terraform apply -auto-approve tfplan
+          terraform destroy -auto-approve tfplan
           echo "manager_ip=$(terraform output -raw manager_ip)" >> $GITHUB_OUTPUT
           echo "floating_ip=$(terraform output -raw floating_ip)" >> $GITHUB_OUTPUT
           echo "worker_ips=$(terraform output -json worker_ips)" >> $GITHUB_OUTPUT
