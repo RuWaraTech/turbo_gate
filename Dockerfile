@@ -101,6 +101,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 
 ENTRYPOINT ["/entrypoint.sh"]
+
 # Use exec form for better signal handling
 CMD ["poetry", "run", "gunicorn", \
      "--bind", "0.0.0.0:5000", \
