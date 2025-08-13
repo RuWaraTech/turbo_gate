@@ -24,7 +24,7 @@
     - name: Pre-deployment infrastructure checks
       block:
         - name: Check Docker Swarm status
-          ansible.builtin.command: docker info --format '{{ "{{" }}.Swarm.LocalNodeState{{ "}}" }}'
+          ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
           register: swarm_status
           failed_when: swarm_status.stdout != "active"
           changed_when: false
@@ -63,7 +63,7 @@
         - /var/log/turbogate/nginx
 
     - name: Check existing Docker secrets
-      ansible.builtin.command: docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      ansible.builtin.command: docker secret ls --format '{{ '{{' }}.Name{{ '}}' }}'
       register: existing_secrets
       changed_when: false
 
@@ -96,17 +96,21 @@
       register: secret_creation
 
     - name: Verify secrets were created
-      ansible.builtin.command: docker secret inspect {{ item.name }} --format '{{ "{{" }}.Spec.Name{{ "}}" }}: Created'
+      ansible.builtin.command: docker secret inspect {{ item.name }} --format '{{ '{{' }}.Spec.Name{{ '}}' }}: Created'
       loop:
         - { name: "turbogate_secret_key" }
         - { name: "redis_password" }
       register: secret_verification
       changed_when: false
 
-    - name: Display secret verification
-      ansible.builtin.debug:
-        msg: "{{ item.stdout }}"
+    - name: Verify secret creation was successful
+      ansible.builtin.assert:
+        that:
+          - "'Created' in item.stdout"
+        fail_msg: "Failed to create secret {{ item.item.name }}"
       loop: "{{ secret_verification.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
 
     - name: Verify overlay network exists
       community.docker.docker_network:
@@ -129,9 +133,9 @@
 
     - name: Backup current deployment info
       ansible.builtin.shell: |
-        if docker stack ls --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q "^{{ stack_name }}$"; then
+        if docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}' | grep -q "^{{ stack_name }}$"; then
           docker service ls --filter "name={{ stack_name }}_" \
-            --format "{{ "{{" }}.Name{{ "}}" }}:{{ "{{" }}.Image{{ "}}" }}" > /tmp/{{ stack_name }}_backup_deployment.txt
+            --format "{{ '{{' }}.Name{{ '}}' }}:{{ '{{' }}.Image{{ '}}' }}" > /tmp/{{ stack_name }}_backup_deployment.txt
           echo "Backup created"
         else
           echo "No existing deployment to backup"
@@ -144,7 +148,7 @@
         msg: "{{ deployment_backup.stdout }}"
 
     - name: Check if stack is already deployed
-      ansible.builtin.command: docker stack ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      ansible.builtin.command: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}'
       register: existing_stacks
       changed_when: false
 
@@ -157,7 +161,7 @@
 
         - name: Wait for stack removal to complete
           ansible.builtin.shell: |
-            while docker stack ls --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q "^{{ stack_name }}$"; do
+            while docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}' | grep -q "^{{ stack_name }}$"; do
               echo "Waiting for stack removal..."
               sleep 5
             done
@@ -195,7 +199,7 @@
             total_services=3
             
             for service in turbogate redis nginx; do
-              if docker service inspect {{ stack_name }}_${service} --format '{{ "{{" }}.ID{{ "}}" }}' >/dev/null 2>&1; then
+              if docker service inspect {{ stack_name }}_${service} --format '{{ '{{' }}.ID{{ '}}' }}' >/dev/null 2>&1; then
                 echo "✅ Service ${service} exists"
                 ((services_ready++))
               else
@@ -218,12 +222,12 @@
         - name: Check service status and replicas
           ansible.builtin.shell: |
             echo "=== SERVICE STATUS ==="
-            docker service ls --filter "name={{ stack_name }}_" --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Replicas{{ "}}" }}\t{{ "{{" }}.Image{{ "}}" }}"
+            docker service ls --filter "name={{ stack_name }}_" --format "table {{ '{{' }}.Name{{ '}}' }}\t{{ '{{' }}.Replicas{{ '}}' }}\t{{ '{{' }}.Image{{ '}}' }}"
             
             echo -e "\n=== DETAILED SERVICE STATUS ==="
             for service in {{ stack_name }}_turbogate {{ stack_name }}_redis {{ stack_name }}_nginx; do
               echo "--- $service ---"
-              docker service ps $service --format "{{ "{{" }}.Name{{ "}}" }}: {{ "{{" }}.CurrentState{{ "}}" }} ({{ "{{" }}.Error{{ "}}" }})" --no-trunc | head -5
+              docker service ps $service --format "{{ '{{' }}.Name{{ '}}' }}: {{ '{{' }}.CurrentState{{ '}}' }} ({{ '{{' }}.Error{{ '}}' }})" --no-trunc | head -5
             done
           register: service_status
           changed_when: false
@@ -238,8 +242,8 @@
             all_running=true
             
             for service in {{ stack_name }}_turbogate {{ stack_name }}_redis {{ stack_name }}_nginx; do
-              running=$(docker service ps $service --filter "desired-state=running" --format "{{ "{{" }}.CurrentState{{ "}}" }}" | grep -c "Running" || echo "0")
-              desired=$(docker service inspect $service --format "{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}" || echo "1")
+              running=$(docker service ps $service --filter "desired-state=running" --format "{{ '{{' }}.CurrentState{{ '}}' }}" | grep -c "Running" || echo "0")
+              desired=$(docker service inspect $service --format "{{ '{{' }}.Spec.Mode.Replicated.Replicas{{ '}}' }}" || echo "1")
               
               echo "$service: $running/$desired replicas running"
               
@@ -272,7 +276,7 @@
             
             echo -e "\nService logs (last 50 lines each):"
             for service in {{ stack_name }}_turbogate {{ stack_name }}_redis {{ stack_name }}_nginx; do
-              if docker service ls --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q "^$service$"; then
+              if docker service ls --format '{{ '{{' }}.Name{{ '}}' }}' | grep -q "^$service$"; then
                 echo "--- $service logs ---"
                 docker service logs --tail 50 $service 2>/dev/null || echo "No logs available"
               fi
