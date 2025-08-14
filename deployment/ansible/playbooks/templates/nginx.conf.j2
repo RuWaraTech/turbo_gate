@@ -51,7 +51,7 @@ server {
     ssl_trusted_certificate /etc/letsencrypt/live/{{ domain_name }}/chain.pem;
     
     # DNS resolver for OCSP stapling
-    resolver 8.8.8.8 8.8.4.4 valid=300s;
+    resolver 127.0.0.11 valid=300s;
     resolver_timeout 5s;
     
     # Security headers

@@ -29,6 +29,16 @@
         - /var/log/turbogate
         - /var/lib/turbogate/redis
         - /var/log/turbogate/nginx
+        - /var/cache/nginx
+        
+    - name: Set correct ownership for NGINX cache directory
+      ansible.builtin.file:
+        path: /var/cache/nginx
+        state: directory
+        owner: 101  # nginx user ID in container
+        group: 101  # nginx group ID in container
+        mode: '0755'
+        recurse: yes
 
     - name: Check if Docker secrets already exist
       ansible.builtin.command: docker secret ls --format '{{ '{{' }}.Name{{ '}}' }}'
