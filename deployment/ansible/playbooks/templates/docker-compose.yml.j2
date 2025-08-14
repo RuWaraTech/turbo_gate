@@ -89,7 +89,6 @@ services:
 
   nginx:
     image: nginx:alpine
-    command: ["/bin/sh", "-c", "sleep 120 && nginx -g 'daemon off;'"]
     deploy:
       replicas: 1
       placement:
