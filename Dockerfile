@@ -66,6 +66,7 @@ COPY .env.test* ./
 ENTRYPOINT ["poetry", "run", "pytest"]
 CMD ["--cov=gateway_service", "--cov-report=term-missing", "--cov-report=html", "-v"]
 
+
 # Stage 3: Production Stage
 FROM python:3.13-slim AS prod
 
@@ -74,8 +75,12 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/poetry/bin:$PATH
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash --uid 1001 app
+# Install curl for health checks and create non-root user
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --shell /bin/bash --uid 1001 app
 
 # Copy Poetry and dependencies from base stage
 COPY --from=base --chown=app:app /opt/poetry /opt/poetry
@@ -86,8 +91,9 @@ COPY --from=base --chown=app:app /usr/local/bin /usr/local/bin
 WORKDIR /gateway_app
 COPY --from=base --chown=app:app /gateway_app /gateway_app
 
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Copy entrypoint script with proper ownership and permissions
+COPY --chown=app:app entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Switch to non-root user
 USER app
@@ -95,12 +101,12 @@ USER app
 # Create volume for persistent data
 VOLUME /gateway_app/data
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/gateway/health')" || exit 1
+# Health check using curl (more reliable than python urllib)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:5000/gateway/health || exit 1
 
-
-ENTRYPOINT ["/entrypoint.sh"]
+# Use the entrypoint script
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 # Use exec form for better signal handling
 CMD ["poetry", "run", "gunicorn", \
@@ -114,4 +120,3 @@ CMD ["poetry", "run", "gunicorn", \
      "gateway_service.app:create_app()"]
 
 EXPOSE 5000
-
