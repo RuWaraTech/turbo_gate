@@ -175,21 +175,21 @@ jobs:
           echo "floating_ip=$(terraform output -raw floating_ip)" >> $GITHUB_OUTPUT
           echo "worker_ips=$(terraform output -json worker_ips)" >> $GITHUB_OUTPUT
       
-      - name: 🚀 Terraform Destroy
-        id: destroy
-        working-directory: deployment/terraform
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
-          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
-          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
-          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
-        run: |
-          # Initialize Terraform with backend configuration
-          terraform init -reconfigure -input=false
+      # - name: 🚀 Terraform Destroy
+      #   id: destroy
+      #   working-directory: deployment/terraform
+      #   env:
+      #     AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
+      #     AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
+      #     TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+      #     TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+      #     TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+      #   run: |
+      #     # Initialize Terraform with backend configuration
+      #     terraform init -reconfigure -input=false
           
-          # Destroy all resources
-          terraform destroy -auto-approve
+      #     # Destroy all resources
+      #     terraform destroy -auto-approve
           
       #     # Capture outputs before destruction completes (if needed for cleanup)
       #     echo "manager_ip=$(terraform output -raw manager_ip || echo '')" >> $GITHUB_OUTPUT
