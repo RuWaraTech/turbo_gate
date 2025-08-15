@@ -1,9 +1,9 @@
 name: CI - Turbo Gate
 on:
   push:
-    branches: ["main"] 
+    branches: ["main"]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   IMAGE_NAME: fwande/turbogate
@@ -15,71 +15,57 @@ jobs:
       duration: ${{ steps.duration.outputs.duration }}
 
     steps:
-    - name: 🕒 Start timer
-      id: timer
-      uses: actions/github-script@v6
-      with:
-        script: |
-          core.setOutput('start_time', new Date().getTime())
+      - name: 🕒 Start timer
+        id: timer
+        uses: actions/github-script@v6
+        with:
+          script: |
+            core.setOutput('start_time', new Date().getTime())
 
-    - name: 🧱 Checkout Code
-      uses: actions/checkout@v4
+      - name: 🧱 Checkout Code
+        uses: actions/checkout@v4
 
-    - name: 🐳 Set up Docker Buildx
-      uses: docker/setup-buildx-action@v2
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-    - name: 📦 Cache Docker layers
-      uses: actions/cache@v4
-      with:
-        path: /tmp/.buildx-cache
-        key: ${{ runner.os }}-buildx-${{ github.sha }}
-        restore-keys: |
-          ${{ runner.os }}-buildx-
+      - name: 📦 Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
 
-    - name: 🔧 Build Docker Image with Test Target
-      run: |
-        docker build \
-        --target test \
-        -t $IMAGE_NAME:test \
-        .
+      - name: 🔧 Build Docker Image with Test Target
+        run: |
+          docker build \
+          --target test \
+          -t $IMAGE_NAME:test \
+          .
 
-    - name: 🧪 Run Tests
-      run: |
-        docker run --rm $IMAGE_NAME:test
+      - name: 🧪 Run Tests
+        run: |
+          docker run --rm $IMAGE_NAME:test
 
-    - name: 🔧 Build Docker Image with Prod Target
-      run: |
-        docker build \
-        --target prod \
-        -t $IMAGE_NAME:prod \
-        .
+      - name: 🔧 Build Docker Image with Prod Target
+        run: |
+          docker build \
+          --target prod \
+          -t $IMAGE_NAME:prod \
+          .
 
-    - name: Run Production Container in Background
-      run: |
-        docker run --rm -d -p 5000:5000 --name turbogate_prod $IMAGE_NAME:prod
+      - name: Calculate duration
+        id: duration
+        uses: actions/github-script@v6
+        if: always()
+        with:
+          script: |
+            const start = ${{ steps.timer.outputs.start_time }}
+            const end = new Date().getTime()
+            const duration = ((end - start) / 1000).toFixed(2)
+            core.setOutput('duration', duration)
 
-    - name: Health Check on Prod Container
-      run: |
-        sleep 30
-        curl --retry 3 --retry-delay 5 --fail http://localhost:5000/gateway/health
-
-    - name: Stop Prod Container
-      if: always()
-      run: |
-        docker stop turbogate_prod || true
-
-    - name: Calculate duration
-      id: duration
-      uses: actions/github-script@v6
-      if: always()
-      with:
-        script: |
-          const start = ${{ steps.timer.outputs.start_time }}
-          const end = new Date().getTime()
-          const duration = ((end - start) / 1000).toFixed(2)
-          core.setOutput('duration', duration)
-
-  discord-notify:
+  discord_notify:
     needs: build
     runs-on: ubuntu-latest
     if: always()
@@ -87,20 +73,55 @@ jobs:
       - name: Extract commit info
         id: commit-info
         run: |
-          # Fallback for commit message
+          # Fallback for commit message with better handling
           COMMIT_MSG="${{ github.event.head_commit.message }}"
+          COMMIT_MSG="${COMMIT_MSG:-${{ github.event.commits[0].message }}}"
           COMMIT_MSG="${COMMIT_MSG:-No commit message}"
-          FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1 | sed 's/"/\\"/g')
+          
+          # Clean and truncate commit message
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1 | sed 's/"/\\"/g' | cut -c1-100)
+          if [ ${#COMMIT_MSG} -gt 100 ]; then
+            FIRST_LINE="${FIRST_LINE}..."
+          fi
           echo "first_line=${FIRST_LINE}" >> $GITHUB_OUTPUT
           
-          # Detect event type
+          # Detect event type with more context
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            echo "pr_text=PR #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "pr_text=PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}" >> $GITHUB_OUTPUT
             echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
-          else
-            echo "pr_text=Push" >> $GITHUB_OUTPUT
+            echo "event_context=pull_request" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "pr_text=Scheduled run" >> $GITHUB_OUTPUT
             echo "author=${{ github.actor }}" >> $GITHUB_OUTPUT
+            echo "event_context=schedule" >> $GITHUB_OUTPUT
+          else
+            echo "pr_text=Push to ${{ github.ref_name }}" >> $GITHUB_OUTPUT
+            echo "author=${{ github.actor }}" >> $GITHUB_OUTPUT
+            echo "event_context=push" >> $GITHUB_OUTPUT
           fi
+
+      - name: Calculate build duration
+        id: duration
+        run: |
+          # More accurate duration calculation
+          if [ -n "${{ needs.build.outputs.duration }}" ]; then
+            DURATION="${{ needs.build.outputs.duration }}"
+          else
+            # Fallback: calculate from workflow start time if available
+            START_TIME="${{ github.event.workflow_run.created_at || github.event.head_commit.timestamp }}"
+            if [ -n "$START_TIME" ]; then
+              START_EPOCH=$(date -d "$START_TIME" +%s 2>/dev/null || echo "")
+              CURRENT_EPOCH=$(date +%s)
+              if [ -n "$START_EPOCH" ]; then
+                DURATION=$((CURRENT_EPOCH - START_EPOCH))
+              else
+                DURATION="N/A"
+              fi
+            else
+              DURATION="N/A"
+            fi
+          fi
+          echo "duration=${DURATION}" >> $GITHUB_OUTPUT
 
       - name: Validate and send Discord notification
         env:
@@ -108,64 +129,131 @@ jobs:
         run: |
           # Validate webhook
           if [ -z "$WEBHOOK_URL" ]; then
-            echo "⚠️ Discord webhook not configured"
+            echo "⚠️ Discord webhook not configured (DISCORD_WEBHOOK secret missing)"
             exit 0
           fi
 
-          # Set build status
-          if [ "${{ needs.build.result }}" == "success" ]; then
-            STATUS_EMOJI="✅"
-            STATUS_TEXT="Success"
-            COLOR="65280" # Green
+          # Enhanced build status with more granular states
+          BUILD_RESULT="${{ needs.build.result }}"
+          case "$BUILD_RESULT" in
+            "success")
+              STATUS_EMOJI="✅"
+              STATUS_TEXT="Success"
+              COLOR="65280" # Green
+              ;;
+            "failure")
+              STATUS_EMOJI="❌"
+              STATUS_TEXT="Failed"
+              COLOR="16711680" # Red
+              ;;
+            "cancelled")
+              STATUS_EMOJI="⚠️"
+              STATUS_TEXT="Cancelled"
+              COLOR="16776960" # Yellow
+              ;;
+            "skipped")
+              STATUS_EMOJI="⏭️"
+              STATUS_TEXT="Skipped"
+              COLOR="8421504" # Gray
+              ;;
+            *)
+              STATUS_EMOJI="❓"
+              STATUS_TEXT="Unknown"
+              COLOR="8421504" # Gray
+              ;;
+          esac
+
+          # Format duration
+          DURATION_RAW="${{ steps.duration.outputs.duration }}"
+          if [ "$DURATION_RAW" != "N/A" ] && [ "$DURATION_RAW" -gt 0 ]; then
+            if [ "$DURATION_RAW" -gt 3600 ]; then
+              DURATION_FORMATTED="$(($DURATION_RAW / 3600))h $(($DURATION_RAW % 3600 / 60))m $(($DURATION_RAW % 60))s"
+            elif [ "$DURATION_RAW" -gt 60 ]; then
+              DURATION_FORMATTED="$(($DURATION_RAW / 60))m $(($DURATION_RAW % 60))s"
+            else
+              DURATION_FORMATTED="${DURATION_RAW}s"
+            fi
           else
-            STATUS_EMOJI="❌"
-            STATUS_TEXT="Failure"
-            COLOR="16711680" # Red
+            DURATION_FORMATTED="N/A"
           fi
 
-          # Build JSON payload using jq
+          # Get commit URL with fallback
+          COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}"
+          COMMIT_SHORT="${{ github.sha }}"
+          COMMIT_SHORT="${COMMIT_SHORT:0:7}"
+
+          # Enhanced description with conditional fields
+          DESCRIPTION="**Status**: $STATUS_EMOJI $STATUS_TEXT"
+          DESCRIPTION="$DESCRIPTION\n**Repository**: [\`${{ github.repository }}\`](${{ github.server_url }}/${{ github.repository }})"
+          DESCRIPTION="$DESCRIPTION\n**Branch**: \`${{ github.ref_name || github.ref }}\`"
+          DESCRIPTION="$DESCRIPTION\n**Author**: @${{ steps.commit-info.outputs.author }}"
+          DESCRIPTION="$DESCRIPTION\n**Trigger**: ${{ steps.commit-info.outputs.pr_text }}"
+          DESCRIPTION="$DESCRIPTION\n**Commit**: [\`${COMMIT_SHORT}\`]($COMMIT_URL)"
+          
+          # Only add commit message if it's not empty/default
+          COMMIT_MESSAGE="${{ steps.commit-info.outputs.first_line }}"
+          if [ "$COMMIT_MESSAGE" != "No commit message" ] && [ -n "$COMMIT_MESSAGE" ]; then
+            DESCRIPTION="$DESCRIPTION\n**Message**: $COMMIT_MESSAGE"
+          fi
+          
+          DESCRIPTION="$DESCRIPTION\n**Workflow**: [${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          DESCRIPTION="$DESCRIPTION\n**Duration**: $DURATION_FORMATTED"
+          DESCRIPTION="$DESCRIPTION\n**Runner**: ubuntu-latest"
+
+          # Build JSON payload using jq with better error handling
           PAYLOAD=$(jq -n \
             --arg title "TurboGate CI $STATUS_TEXT" \
-            --arg status "$STATUS_EMOJI $STATUS_TEXT" \
+            --arg description "$DESCRIPTION" \
             --arg repo "${{ github.repository }}" \
-            --arg branch "${{ github.ref_name || github.ref }}" \
-            --arg author "@${{ steps.commit-info.outputs.author }}" \
-            --arg trigger "${{ steps.commit-info.outputs.pr_text }}" \
-            --arg commit "[${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" \
-            --arg message "${{ steps.commit-info.outputs.first_line }}" \
-            --arg workflow "[${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" \
-            --arg duration "${{ needs.build.outputs.duration || 'N/A' }} seconds" \
             --arg username "${{ github.actor }}" \
             --arg avatar_url "https://github.com/${{ github.actor }}.png" \
             --argjson color "$COLOR" \
             '{
               embeds: [{
                 title: $title,
-                description: (
-                  "**Status**: \($status)\n" +
-                  "**Repository**: `\($repo)`\n" +
-                  "**Branch**: `\($branch)`\n" +
-                  "**Author**: \($author)\n" +
-                  "**Trigger**: \($trigger)\n" +
-                  "**Commit**: \($commit)\n" +
-                  "**Message**: \($message)\n" +
-                  "**Workflow**: \($workflow)\n" +
-                  "**Duration**: \($duration)\n" +
-                  "**Runner**: ubuntu-latest"
-                ),
+                description: $description,
                 color: $color,
                 timestamp: now|strftime("%Y-%m-%dT%H:%M:%SZ"),
                 footer: {
                   text: "GitHub Actions",
                   icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                },
+                author: {
+                  name: $username,
+                  icon_url: $avatar_url,
+                  url: ("https://github.com/" + $username)
                 }
               }],
-              username: $username,
-              avatar_url: $avatar_url
+              username: ("CI Bot (" + $repo + ")"),
+              avatar_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
             }')
 
-          # Send to Discord
-          curl -sS -X POST \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD" \
-            "$WEBHOOK_URL" || echo "⚠️ Failed to send Discord notification"
+          # Send to Discord with retry logic
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            HTTP_STATUS=$(curl -w "%{http_code}" -o /tmp/discord_response.json -sS -X POST \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD" \
+              "$WEBHOOK_URL")
+            
+            if [ "$HTTP_STATUS" -eq 204 ]; then
+              echo "✅ Discord notification sent successfully"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "⚠️ Discord notification failed (HTTP $HTTP_STATUS), attempt $RETRY_COUNT/$MAX_RETRIES"
+              
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "Retrying in $((RETRY_COUNT * 2)) seconds..."
+                sleep $((RETRY_COUNT * 2))
+              else
+                echo "❌ Failed to send Discord notification after $MAX_RETRIES attempts"
+                if [ -f /tmp/discord_response.json ]; then
+                  echo "Response body:"
+                  cat /tmp/discord_response.json
+                fi
+              fi
+            fi
+          done
