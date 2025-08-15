@@ -24,10 +24,46 @@ jobs:
 
       - name: 🧱 Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Get full commit history for better message extraction
 
-      # ... [rest of your build steps remain the same] ...
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: 📦 Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: 🔧 Build Docker Image with Test Target
+        run: |
+          docker build \
+            --target test \
+            -t $IMAGE_NAME:test \
+            .
+
+      - name: 🧪 Run Tests
+        run: |
+          docker run --rm $IMAGE_NAME:test
+
+      - name: 🔧 Build Docker Image with Prod Target
+        run: |
+          docker build \
+            --target prod \
+            -t $IMAGE_NAME:prod \
+            .
+
+      - name: Calculate duration
+        id: duration
+        uses: actions/github-script@v6
+        if: always()
+        with:
+          script: |
+            const start = ${{ steps.timer.outputs.start_time }}
+            const end = new Date().getTime()
+            const duration = ((end - start) / 1000).toFixed(2)
+            core.setOutput('duration', duration)
 
   discord_notify:
     needs: build
@@ -37,37 +73,20 @@ jobs:
       - name: Extract commit info
         id: commit-info
         run: |
-          # Enhanced commit message extraction
+          # Fallback for commit message
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          COMMIT_MSG="${COMMIT_MSG:-No commit message}"
+          FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1 | sed 's/"/\\"/g')
+          echo "first_line=${FIRST_LINE}" >> $GITHUB_OUTPUT
+          
+          # Detect event type
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            # For PRs, use PR title + last commit message
-            PR_TITLE="${{ github.event.pull_request.title }}"
-            LAST_COMMIT_MSG=$(git log -1 --pretty=%B | head -n 1)
-            COMMIT_MSG="$PR_TITLE (Last commit: $LAST_COMMIT_MSG)"
-            echo "pr_text=PR #${{ github.event.pull_request.number }}: $PR_TITLE" >> $GITHUB_OUTPUT
+            echo "pr_text=PR #${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
             echo "author=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
           else
-            # For pushes, use the actual commit message
-            COMMIT_MSG="${{ github.event.head_commit.message }}"
-            if [ -z "$COMMIT_MSG" ]; then
-              # Fallback to git log if head_commit.message is empty
-              COMMIT_MSG=$(git log -1 --pretty=%B | head -n 1)
-            fi
-            echo "pr_text=Push to ${{ github.ref_name || github.ref }}" >> $GITHUB_OUTPUT
+            echo "pr_text=Push" >> $GITHUB_OUTPUT
             echo "author=${{ github.actor }}" >> $GITHUB_OUTPUT
           fi
-
-          # Clean and format the message
-          COMMIT_MSG="${COMMIT_MSG:-[No commit message provided]}"
-          FIRST_LINE=$(echo "$COMMIT_MSG" | head -n 1 | sed -e 's/"/\\"/g' -e 's/\r//g' -e 's/\n/ /g')
-          
-          echo "first_line=${FIRST_LINE}" >> $GITHUB_OUTPUT
-          echo "full_message=${COMMIT_MSG}" >> $GITHUB_OUTPUT
-
-      - name: Debug commit info
-        if: github.event_name != 'pull_request'
-        run: |
-          echo "HEAD_COMMIT: ${{ toJson(github.event.head_commit) }}"
-          echo "Extracted message: ${{ steps.commit-info.outputs.full_message }}"
 
       - name: Validate and send Discord notification
         env:
@@ -79,7 +98,7 @@ jobs:
             exit 0
           fi
 
-          # Enhanced status detection
+          # Set build status
           if [ "${{ needs.build.result }}" == "success" ]; then
             STATUS_EMOJI="✅"
             STATUS_TEXT="Success"
@@ -88,14 +107,6 @@ jobs:
             STATUS_EMOJI="❌"
             STATUS_TEXT="Failure"
             COLOR="16711680" # Red
-          fi
-
-          # Enhanced message with commit details
-          COMMIT_DETAILS=""
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            COMMIT_DETAILS="**PR Title**: ${{ steps.commit-info.outputs.first_line }}"
-          else
-            COMMIT_DETAILS="**Commit Message**: ${{ steps.commit-info.outputs.first_line }}"
           fi
 
           # Build JSON payload using jq
@@ -107,7 +118,7 @@ jobs:
             --arg author "@${{ steps.commit-info.outputs.author }}" \
             --arg trigger "${{ steps.commit-info.outputs.pr_text }}" \
             --arg commit "[${GITHUB_SHA:0:7}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})" \
-            --arg message "${{ steps.commit-info.outputs.full_message }}" \
+            --arg message "${{ steps.commit-info.outputs.first_line }}" \
             --arg workflow "[${{ github.workflow }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" \
             --arg duration "${{ needs.build.outputs.duration || 'N/A' }} seconds" \
             --arg username "${{ github.actor }}" \
@@ -123,7 +134,7 @@ jobs:
                   "**Author**: \($author)\n" +
                   "**Trigger**: \($trigger)\n" +
                   "**Commit**: \($commit)\n" +
-                  "\($message)\n" +
+                  "**Message**: \($message)\n" +
                   "**Workflow**: \($workflow)\n" +
                   "**Duration**: \($duration)\n" +
                   "**Runner**: ubuntu-latest"
@@ -139,7 +150,7 @@ jobs:
               avatar_url: $avatar_url
             }')
 
-          # Send to Discord with error handling
+          # Send to Discord
           curl -sS -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
