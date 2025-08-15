@@ -409,57 +409,11 @@
 
     - name: Clean up old versioned secrets (keep only current version)
       ansible.builtin.command: docker secret rm {{ item }}
-      loop: "{{ all_secrets_post_deploy.stdout_lines }}"
+      loop: "{{ all_secrets_post_deploy.stdout_lines | default([]) }}"
       when:
         - all_secrets_post_deploy is defined
-        - item is regex('^(turbogate_secret_key|redis_password)_v[0-9]+
-
-    # Post-deployment verification and reporting
-    - name: Get comprehensive service status
-      ansible.builtin.shell: |
-        echo "=== Service Overview ==="
-        docker service ls --filter "name={{ stack_name }}_"
-        echo ""
-        echo "=== TurboGate Service Tasks ==="
-        docker service ps {{ stack_name }}_turbogate --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
-        echo ""
-        echo "=== NGINX Service Tasks ==="
-        docker service ps {{ stack_name }}_nginx --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
-        echo ""
-        echo "=== Redis Service Tasks ==="
-        docker service ps {{ stack_name }}_redis --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
-        echo ""
-        echo "=== Resource Usage ==="
-        docker stats --no-stream --format "table {{ "{{" }}.Container{{ "}}" }}\t{{ "{{" }}.CPUPerc{{ "}}" }}\t{{ "{{" }}.MemUsage{{ "}}" }}" || echo "Stats not available"
-      register: detailed_status
-      changed_when: false
-    
-    - name: Display detailed service status
-      ansible.builtin.debug:
-        var: detailed_status.stdout_lines
-
-    - name: Final deployment verification
-      ansible.builtin.assert:
-        that:
-          - deployment_status.rc in [0, 2]
-          - domain_health_check.status == 200
-          - gateway_health_check.status == 200
-          - nginx_internal_health.rc == 0
-        fail_msg: "Deployment verification failed. Health checks: nginx_internal={{ nginx_internal_health.rc | default('failed') }}, domain={{ domain_health_check.status | default('failed') }}, gateway={{ gateway_health_check.status | default('failed') }}"
-        success_msg: "Zero-downtime deployment completed successfully with production SSL certificates!"
-
-    - name: Deployment summary
-      ansible.builtin.debug:
-        msg:
-          - "=== DEPLOYMENT COMPLETED ==="
-          - "Stack: {{ stack_name }}"
-          - "Image: {{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}"
-          - "Domain: {{ domain_name }}"
-          - "SSL Status: Production certificates (trusted)"
-          - "Health Status - Domain: {{ domain_health_check.status | default('N/A') }}, Gateway: {{ gateway_health_check.status | default('N/A') }}"
-          - "NGINX Internal: {{ 'OK' if nginx_internal_health.rc == 0 else 'Failed' }}"
-          - "Monitor logs: docker service logs {{ stack_name }}_turbogate --follow"
-          - "Service status: docker service ls --filter name={{ stack_name }}_"
+        - all_secrets_post_deploy.stdout_lines is defined
+        - item is regex('^(turbogate_secret_key|redis_password)_v[0-9]+$')
         - item != 'turbogate_secret_key_v' + secret_version
         - item != 'redis_password_v' + secret_version
       failed_when: false
@@ -475,57 +429,11 @@
 
     - name: Clean up old versioned nginx configs (keep only current version)
       ansible.builtin.command: docker config rm {{ item }}
-      loop: "{{ all_configs_post_deploy.stdout_lines }}"
+      loop: "{{ all_configs_post_deploy.stdout_lines | default([]) }}"
       when:
         - all_configs_post_deploy is defined
-        - item is regex('^nginx_config_v[0-9]+
-
-    # Post-deployment verification and reporting
-    - name: Get comprehensive service status
-      ansible.builtin.shell: |
-        echo "=== Service Overview ==="
-        docker service ls --filter "name={{ stack_name }}_"
-        echo ""
-        echo "=== TurboGate Service Tasks ==="
-        docker service ps {{ stack_name }}_turbogate --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
-        echo ""
-        echo "=== NGINX Service Tasks ==="
-        docker service ps {{ stack_name }}_nginx --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
-        echo ""
-        echo "=== Redis Service Tasks ==="
-        docker service ps {{ stack_name }}_redis --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
-        echo ""
-        echo "=== Resource Usage ==="
-        docker stats --no-stream --format "table {{ "{{" }}.Container{{ "}}" }}\t{{ "{{" }}.CPUPerc{{ "}}" }}\t{{ "{{" }}.MemUsage{{ "}}" }}" || echo "Stats not available"
-      register: detailed_status
-      changed_when: false
-    
-    - name: Display detailed service status
-      ansible.builtin.debug:
-        var: detailed_status.stdout_lines
-
-    - name: Final deployment verification
-      ansible.builtin.assert:
-        that:
-          - deployment_status.rc in [0, 2]
-          - domain_health_check.status == 200
-          - gateway_health_check.status == 200
-          - nginx_internal_health.rc == 0
-        fail_msg: "Deployment verification failed. Health checks: nginx_internal={{ nginx_internal_health.rc | default('failed') }}, domain={{ domain_health_check.status | default('failed') }}, gateway={{ gateway_health_check.status | default('failed') }}"
-        success_msg: "Zero-downtime deployment completed successfully with production SSL certificates!"
-
-    - name: Deployment summary
-      ansible.builtin.debug:
-        msg:
-          - "=== DEPLOYMENT COMPLETED ==="
-          - "Stack: {{ stack_name }}"
-          - "Image: {{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}"
-          - "Domain: {{ domain_name }}"
-          - "SSL Status: Production certificates (trusted)"
-          - "Health Status - Domain: {{ domain_health_check.status | default('N/A') }}, Gateway: {{ gateway_health_check.status | default('N/A') }}"
-          - "NGINX Internal: {{ 'OK' if nginx_internal_health.rc == 0 else 'Failed' }}"
-          - "Monitor logs: docker service logs {{ stack_name }}_turbogate --follow"
-          - "Service status: docker service ls --filter name={{ stack_name }}_")
+        - all_configs_post_deploy.stdout_lines is defined
+        - item is regex('^nginx_config_v[0-9]+$')
         - item != 'nginx_config_v' + secret_version
       failed_when: false
       ignore_errors: yes
