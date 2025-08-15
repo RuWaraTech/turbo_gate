@@ -39,9 +39,9 @@ jobs:
       - name: 🔧 Build Docker Image with Test Target
         run: |
           docker build \
-          --target test \
-          -t $IMAGE_NAME:test \
-          .
+            --target test \
+            -t $IMAGE_NAME:test \
+            .
 
       - name: 🧪 Run Tests
         run: |
@@ -50,9 +50,9 @@ jobs:
       - name: 🔧 Build Docker Image with Prod Target
         run: |
           docker build \
-          --target prod \
-          -t $IMAGE_NAME:prod \
-          .
+            --target prod \
+            -t $IMAGE_NAME:prod \
+            .
 
       - name: Calculate duration
         id: duration
