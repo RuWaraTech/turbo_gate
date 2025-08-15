@@ -46,10 +46,11 @@
     # Pre-deployment health check with proper domain
     - name: Check current deployment health
       ansible.builtin.uri:
-        url: "https://{{ domain_name }}/health"
+        url: "https://{{ domain_name }}/gateway/health"
         method: GET
         status_code: [200, 404, 502, 503]
         timeout: 10
+        validate_certs: true
       register: pre_deploy_health
       failed_when: false
       changed_when: false
@@ -244,46 +245,63 @@
           ansible.builtin.fail:
             msg: "Deployment failed. Rollback initiated. Check service logs: docker service logs {{ stack_name }}_turbogate"
 
-    # Enhanced health verification
+    # Enhanced health verification with production certificates
     - name: Wait for services to fully stabilize
       ansible.builtin.pause:
         seconds: 30
 
-    - name: Verify service health via localhost
-      ansible.builtin.uri:
-        url: "http://localhost/health"
-        method: GET
-        status_code: 200
-        timeout: 10
-      register: localhost_health_check
-      retries: 15
+    - name: Verify nginx container health directly
+      ansible.builtin.shell: |
+        NGINX_CONTAINER=$(docker ps -q -f name={{ stack_name }}_nginx --filter status=running | head -1)
+        if [ ! -z "$NGINX_CONTAINER" ]; then
+          docker exec $NGINX_CONTAINER curl -f http://localhost/lb-health
+        else
+          echo "No running nginx container found"
+          exit 1
+        fi
+      register: nginx_internal_health
+      retries: 5
       delay: 10
-      until: localhost_health_check.status == 200
+      until: nginx_internal_health.rc == 0
       failed_when: false
 
-    - name: Verify application endpoints via localhost
-      ansible.builtin.uri:
-        url: "http://localhost/gateway/health"
-        method: GET
-        status_code: 200
-        timeout: 10
-      register: localhost_app_health_check
-      retries: 10
-      delay: 10
-      until: localhost_app_health_check.status == 200
-      failed_when: false
-
-    - name: Verify service health via domain
+    - name: Verify service health via domain (HTTPS with production certs)
       ansible.builtin.uri:
         url: "https://{{ domain_name }}/health"
         method: GET
         status_code: 200
         timeout: 15
-        validate_certs: false
+        validate_certs: true
       register: domain_health_check
       retries: 10
       delay: 15
       until: domain_health_check.status == 200
+      failed_when: false
+
+    - name: Verify gateway endpoint via domain
+      ansible.builtin.uri:
+        url: "https://{{ domain_name }}/gateway/health"
+        method: GET
+        status_code: 200
+        timeout: 15
+        validate_certs: true
+      register: gateway_health_check
+      retries: 5
+      delay: 10
+      until: gateway_health_check.status == 200
+      failed_when: false
+
+    - name: Verify load balancer health endpoint
+      ansible.builtin.uri:
+        url: "https://{{ domain_name }}/lb-health"
+        method: GET
+        status_code: 200
+        timeout: 10
+        validate_certs: true
+      register: lb_health_check
+      retries: 3
+      delay: 5
+      until: lb_health_check.status == 200
       failed_when: false
 
     # Post-deployment verification and reporting
@@ -314,10 +332,11 @@
       ansible.builtin.assert:
         that:
           - deployment_status.rc in [0, 2]
-          - localhost_health_check.status == 200 or domain_health_check.status == 200
-          - localhost_app_health_check.status == 200
-        fail_msg: "Deployment verification failed. Health checks: localhost={{ localhost_health_check.status | default('failed') }}, domain={{ domain_health_check.status | default('failed') }}, app={{ localhost_app_health_check.status | default('failed') }}"
-        success_msg: "Zero-downtime deployment completed successfully!"
+          - domain_health_check.status == 200
+          - gateway_health_check.status == 200
+          - nginx_internal_health.rc == 0
+        fail_msg: "Deployment verification failed. Health checks: nginx_internal={{ nginx_internal_health.rc | default('failed') }}, domain={{ domain_health_check.status | default('failed') }}, gateway={{ gateway_health_check.status | default('failed') }}"
+        success_msg: "Zero-downtime deployment completed successfully with production SSL certificates!"
 
     - name: Deployment summary
       ansible.builtin.debug:
@@ -326,7 +345,8 @@
           - "Stack: {{ stack_name }}"
           - "Image: {{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}"
           - "Domain: {{ domain_name }}"
-          - "Health Status - Localhost: {{ localhost_health_check.status | default('N/A') }}, Domain: {{ domain_health_check.status | default('N/A') }}"
-          - "App Health: {{ localhost_app_health_check.status | default('N/A') }}"
+          - "SSL Status: Production certificates (trusted)"
+          - "Health Status - Domain: {{ domain_health_check.status | default('N/A') }}, Gateway: {{ gateway_health_check.status | default('N/A') }}"
+          - "NGINX Internal: {{ 'OK' if nginx_internal_health.rc == 0 else 'Failed' }}"
           - "Monitor logs: docker service logs {{ stack_name }}_turbogate --follow"
           - "Service status: docker service ls --filter name={{ stack_name }}_"
