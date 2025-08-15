@@ -45,7 +45,7 @@
     # Pre-deployment health check
     - name: Check current deployment health
       ansible.builtin.uri:
-        url: "http://ridebase.app/health"
+        url: "https://ridebase.app/health"
         method: GET
         status_code: [200, 404, 502]
       register: pre_deploy_health
