@@ -185,7 +185,7 @@ jobs:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
           TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
         run: |
-          terraform plan -out=tfplan -input=false -detailed-exitcode
+          terraform plan -out=tfplan -input=false
         continue-on-error: true
       
       - name: Terraform Apply
@@ -198,16 +198,7 @@ jobs:
           TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
           TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
         run: |
-          if [ "${{ steps.plan.outputs.exitcode }}" == "2" ]; then
-            echo "Infrastructure changes detected, applying..."
-            terraform apply -auto-approve tfplan
-          elif [ "${{ steps.plan.outputs.exitcode }}" == "0" ]; then
-            echo "No infrastructure changes needed"
-          else
-            echo "Terraform plan failed"
-            exit 1
-          fi
-          
+          terraform apply -auto-approve tfplan
           echo "manager_ip=$(terraform output -raw manager_ip)" >> $GITHUB_OUTPUT
           echo "floating_ip=$(terraform output -raw floating_ip)" >> $GITHUB_OUTPUT
           echo "worker_ips=$(terraform output -json worker_ips)" >> $GITHUB_OUTPUT
