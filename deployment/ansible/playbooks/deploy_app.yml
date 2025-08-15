@@ -209,8 +209,8 @@
               exit 1
             fi
           register: deployment_status
-          retries: 30
-          delay: 20
+          retries: 5
+          delay: 1
           until: deployment_status.rc == 0 or deployment_status.rc == 2
           failed_when: deployment_status.rc == 1
 
