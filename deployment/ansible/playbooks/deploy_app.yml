@@ -73,7 +73,7 @@
     - name: Check if services are using old secrets
       ansible.builtin.shell: |
         STACK_NAME="{{ stack_name }}"
-        FORMAT_SECRETS='{{json .Spec.TaskTemplate.ContainerSpec.Secrets}}'
+        FORMAT_SECRETS='{% raw %}{{json .Spec.TaskTemplate.ContainerSpec.Secrets}}{% endraw %}'
         docker service inspect "${STACK_NAME}_{{ item }}" --format "$FORMAT_SECRETS"
       loop:
         - turbogate
@@ -141,15 +141,12 @@
       failed_when: false
       ignore_errors: yes
 
-    # Create aliases for the versioned secrets (for new deployments)
     - name: Create secret aliases for compose file compatibility
       ansible.builtin.shell: |
         SECRET_NAME="{{ item.name }}"
         SECRET_VALUE="{{ item.value }}"
-        FORMAT_NAME='{{.Name}}'
-        # Check if the unversioned secret exists
+        FORMAT_NAME='{% raw %}{{.Name}}{% endraw %}'
         if ! docker secret ls --format "$FORMAT_NAME" | grep -q "^${SECRET_NAME}$"; then
-          # Create a reference to the versioned secret
           echo -n "$SECRET_VALUE" | docker secret create "$SECRET_NAME" -
         fi
       loop:
@@ -180,7 +177,7 @@
     - name: Check if nginx service exists and uses old config
       ansible.builtin.shell: |
         STACK_NAME="{{ stack_name }}"
-        FORMAT_CONFIGS='{{json .Spec.TaskTemplate.ContainerSpec.Configs}}'
+        FORMAT_CONFIGS='{% raw %}{{json .Spec.TaskTemplate.ContainerSpec.Configs}}{% endraw %}'
         docker service inspect "${STACK_NAME}_nginx" --format "$FORMAT_CONFIGS"
       register: nginx_service_config
       failed_when: false
@@ -253,7 +250,7 @@
     - name: Get current service info if stack exists
       ansible.builtin.shell: |
         STACK_NAME="{{ stack_name }}"
-        FORMAT_IMAGE='{{.Spec.TaskTemplate.ContainerSpec.Image}}'
+        FORMAT_IMAGE='{% raw %}{{.Spec.TaskTemplate.ContainerSpec.Image}}{% endraw %}'
         docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_IMAGE"
       register: current_image
       when: stack_name in existing_stacks.stdout_lines
@@ -286,45 +283,39 @@
 
         - name: Monitor deployment progress with detailed logging
           ansible.builtin.shell: |
-            set +e  # Don't exit on first error
+            set +e
             echo "=== Checking Service Replicas ==="
             
             STACK_NAME="{{ stack_name }}"
-            FORMAT_REPLICAS='{{.Spec.Mode.Replicated.Replicas}}'
-            FORMAT_SERVICE_REPLICAS='{{.Replicas}}'
+            FORMAT_REPLICAS='{% raw %}{{.Spec.Mode.Replicated.Replicas}}{% endraw %}'
+            FORMAT_SERVICE_REPLICAS='{% raw %}{{.Replicas}}{% endraw %}'
             
-            # Get desired replicas - default to expected values if inspect fails
             TURBOGATE_DESIRED=$(docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_REPLICAS" 2>/dev/null)
             REDIS_DESIRED=$(docker service inspect "${STACK_NAME}_redis" --format "$FORMAT_REPLICAS" 2>/dev/null)
             NGINX_DESIRED=$(docker service inspect "${STACK_NAME}_nginx" --format "$FORMAT_REPLICAS" 2>/dev/null)
             
-            # Set defaults if empty
             TURBOGATE_DESIRED=${TURBOGATE_DESIRED:-3}
             REDIS_DESIRED=${REDIS_DESIRED:-1}
             NGINX_DESIRED=${NGINX_DESIRED:-2}
             
             echo "Desired replicas - TurboGate: $TURBOGATE_DESIRED, Redis: $REDIS_DESIRED, NGINX: $NGINX_DESIRED"
             
-            # Use docker service ls to check REPLICAS column more reliably
             TURBOGATE_STATUS=$(docker service ls --filter "name=${STACK_NAME}_turbogate" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
             REDIS_STATUS=$(docker service ls --filter "name=${STACK_NAME}_redis" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
             NGINX_STATUS=$(docker service ls --filter "name=${STACK_NAME}_nginx" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
             
             echo "Service status - TurboGate: $TURBOGATE_STATUS, Redis: $REDIS_STATUS, NGINX: $NGINX_STATUS"
             
-            # Extract running count from X/Y format
             TURBOGATE_RUNNING=$(echo "$TURBOGATE_STATUS" | cut -d'/' -f1)
             REDIS_RUNNING=$(echo "$REDIS_STATUS" | cut -d'/' -f1)
             NGINX_RUNNING=$(echo "$NGINX_STATUS" | cut -d'/' -f1)
             
-            # Set to 0 if empty
             TURBOGATE_RUNNING=${TURBOGATE_RUNNING:-0}
             REDIS_RUNNING=${REDIS_RUNNING:-0}
             NGINX_RUNNING=${NGINX_RUNNING:-0}
             
             echo "Running replicas - TurboGate: $TURBOGATE_RUNNING, Redis: $REDIS_RUNNING, NGINX: $NGINX_RUNNING"
             
-            # Check for convergence - are running replicas equal to desired?
             if [ "$TURBOGATE_STATUS" = "${TURBOGATE_DESIRED}/${TURBOGATE_DESIRED}" ] && \
                [ "$REDIS_STATUS" = "${REDIS_DESIRED}/${REDIS_DESIRED}" ] && \
                [ "$NGINX_STATUS" = "${NGINX_DESIRED}/${NGINX_DESIRED}" ]; then
@@ -332,14 +323,14 @@
               exit 0
             elif [ "$TURBOGATE_RUNNING" -ge "1" ] && [ "$REDIS_RUNNING" -ge "1" ] && [ "$NGINX_RUNNING" -ge "1" ]; then
               echo "PARTIAL: Services running but still converging"
-              exit 0  # Changed from exit 2 to exit 0 - running is success
+              exit 0
             else
               echo "WAITING: Services not yet ready"
               exit 1
             fi
           register: deployment_status
-          retries: 10  # Increased retries
-          delay: 15     # Increased delay between checks
+          retries: 10
+          delay: 15
           until: deployment_status.rc == 0
           failed_when: deployment_status.rc != 0
 
@@ -351,12 +342,11 @@
         - name: Check actual service state before rollback
           ansible.builtin.shell: |
             STACK_NAME="{{ stack_name }}"
-            FORMAT_SERVICE_REPLICAS='{{.Replicas}}'
+            FORMAT_SERVICE_REPLICAS='{% raw %}{{.Replicas}}{% endraw %}'
             echo "=== Actual Service State ==="
             docker service ls --filter "name=${STACK_NAME}_"
             echo ""
             echo "=== Service Details ==="
-            # Check if services are actually running
             TURBOGATE_STATUS=$(docker service ls --filter "name=${STACK_NAME}_turbogate" --format "$FORMAT_SERVICE_REPLICAS")
             REDIS_STATUS=$(docker service ls --filter "name=${STACK_NAME}_redis" --format "$FORMAT_SERVICE_REPLICAS")
             NGINX_STATUS=$(docker service ls --filter "name=${STACK_NAME}_nginx" --format "$FORMAT_SERVICE_REPLICAS")
@@ -365,7 +355,6 @@
             echo "Redis: $REDIS_STATUS"
             echo "NGINX: $NGINX_STATUS"
             
-            # Check if services are actually healthy before deciding to rollback
             if [[ "$TURBOGATE_STATUS" == *"/"* ]] && [[ "$REDIS_STATUS" == *"/"* ]] && [[ "$NGINX_STATUS" == *"/"* ]]; then
               TURBOGATE_RUNNING=$(echo "$TURBOGATE_STATUS" | cut -d'/' -f1)
               if [ "$TURBOGATE_RUNNING" -ge "1" ]; then
@@ -389,7 +378,7 @@
         - name: Check if rollback is possible
           ansible.builtin.shell: |
             STACK_NAME="{{ stack_name }}"
-            FORMAT_PREVIOUS='{{.PreviousSpec}}'
+            FORMAT_PREVIOUS='{% raw %}{{.PreviousSpec}}{% endraw %}'
             docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_PREVIOUS"
           register: previous_spec
           failed_when: false
@@ -521,8 +510,8 @@
     - name: Get comprehensive service status
       ansible.builtin.shell: |
         STACK_NAME="{{ stack_name }}"
-        FORMAT_TABLE='table {{.Name}}\t{{.Node}}\t{{.CurrentState}}\t{{.DesiredState}}'
-        FORMAT_STATS='table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}'
+        FORMAT_TABLE='{% raw %}table {{.Name}}\t{{.Node}}\t{{.CurrentState}}\t{{.DesiredState}}{% endraw %}'
+        FORMAT_STATS='{% raw %}table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}{% endraw %}'
         echo "=== Service Overview ==="
         docker service ls --filter "name=${STACK_NAME}_"
         echo ""
