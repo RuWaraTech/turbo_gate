@@ -95,6 +95,7 @@
       ansible.builtin.command: |
         certbot certonly --webroot -w /var/www/certbot \
         -d "{{ domain_name }}" -d "www.{{ domain_name }}" \
+        -- staging \
         --non-interactive --agree-tos --email "{{ admin_email }}" \
         --preferred-challenges http
       when: not ssl_cert.stat.exists
