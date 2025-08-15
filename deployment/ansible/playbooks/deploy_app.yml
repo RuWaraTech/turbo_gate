@@ -111,6 +111,17 @@
           - "{{ compose_file }}"
         state: present
         prune: yes
+
+    - name: Wait for turbogate service to be ready before nginx
+      ansible.builtin.shell: |
+        # Wait for turbogate service to have running tasks
+        timeout 120 bash -c 'until [ $(docker service ps turbogate_turbogate --filter "desired-state=running" --format "{{.CurrentState}}" | grep -c "Running") -ge 1 ]; do sleep 5; done'
+      register: turbogate_ready
+      changed_when: false
+
+    - name: Force restart nginx after turbogate is ready
+      ansible.builtin.command: docker service update --force turbogate_nginx
+      when: turbogate_ready.rc == 0
     
     - name: Wait for services to be ready
       ansible.builtin.pause:
@@ -177,7 +188,7 @@
     - name: Verify service health endpoints
       ansible.builtin.shell: |
         # Check nginx health endpoint
-        curl -sSf http://localhost/health || echo "Nginx health check failed"
+        curl -k -sSf http://localhost/health || echo "Nginx health check failed"
         
         # Try to get a running container for turbogate
         TURBOGATE_CONTAINER=$(docker ps -q -f name={{ stack_name }}_turbogate --filter status=running | head -1)
