@@ -459,7 +459,7 @@
           - "Health Status - Domain: {{ domain_health_check.status | default('N/A') }}, Gateway: {{ gateway_health_check.status | default('N/A') }}"
           - "NGINX Internal: {{ 'OK' if nginx_internal_health.rc == 0 else 'Failed' }}"
           - "Monitor logs: docker service logs {{ stack_name }}_turbogate --follow"
-          - "Service status: docker service ls --filter name={{ stack_name }}_")
+          - "Service status: docker service ls --filter name={{ stack_name }}_"
         - item != 'turbogate_secret_key_v' + secret_version
         - item != 'redis_password_v' + secret_version
       failed_when: false
