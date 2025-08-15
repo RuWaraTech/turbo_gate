@@ -59,35 +59,94 @@
       ansible.builtin.debug:
         msg: "Current deployment status: {{ pre_deploy_health.status | default('Unknown') }}"
 
-    # Improved secrets management
+    # IMPROVED ZERO-DOWNTIME SECRET MANAGEMENT
+    - name: Get current timestamp for versioning
+      ansible.builtin.set_fact:
+        secret_version: "{{ ansible_date_time.epoch }}"
+
     - name: Check existing secrets
       ansible.builtin.command: docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}'
       register: existing_secrets
       changed_when: false
       failed_when: false
 
-    - name: Remove existing secrets if they exist
-      ansible.builtin.command: docker secret rm {{ item }}
+    - name: Check if services are using old secrets
+      ansible.builtin.command: docker service inspect {{ item }} --format '{{ "{{" }}json .Spec.TaskTemplate.ContainerSpec.Secrets{{ "}}" }}'
       loop:
-        - turbogate_secret_key
-        - redis_password
-      when: item in existing_secrets.stdout_lines
+        - "{{ stack_name }}_turbogate"
+        - "{{ stack_name }}_redis"
+      register: service_secrets
       failed_when: false
+      changed_when: false
+      ignore_errors: yes
 
-    - name: Wait for secret removal
-      ansible.builtin.pause:
-        seconds: 5
-      when: existing_secrets.stdout_lines | length > 0
-
-    - name: Create Docker secrets
+    # Create new versioned secrets without removing old ones
+    - name: Create new versioned Docker secrets
       ansible.builtin.shell: |
-        echo -n "{{ item.value }}" | docker secret create {{ item.name }} -
+        echo -n "{{ item.value }}" | docker secret create {{ item.name }}_v{{ secret_version }} -
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
       no_log: true
-      register: secret_creation
-      failed_when: secret_creation.rc != 0
+      register: new_secret_creation
+
+    # If services exist and are using old secrets, update them to use new versioned secrets
+    - name: Update running services with new versioned secrets
+      block:
+        - name: Update turbogate service with new secrets
+          ansible.builtin.command: |
+            docker service update \
+              --secret-rm turbogate_secret_key \
+              --secret-rm redis_password \
+              --secret-add source=turbogate_secret_key_v{{ secret_version }},target=turbogate_secret_key \
+              --secret-add source=redis_password_v{{ secret_version }},target=redis_password \
+              {{ stack_name }}_turbogate
+          register: turbogate_update
+          failed_when: false
+          when: "'turbogate_turbogate' in existing_secrets.stdout or '{{ stack_name }}_turbogate' in existing_secrets.stdout"
+
+        - name: Update redis service with new secret
+          ansible.builtin.command: |
+            docker service update \
+              --secret-rm redis_password \
+              --secret-add source=redis_password_v{{ secret_version }},target=redis_password \
+              {{ stack_name }}_redis
+          register: redis_update
+          failed_when: false
+          when: "'turbogate_redis' in existing_secrets.stdout or '{{ stack_name }}_redis' in existing_secrets.stdout"
+
+        - name: Wait for service updates to complete
+          ansible.builtin.pause:
+            seconds: 30
+          when: turbogate_update is changed or redis_update is changed
+
+      when: service_secrets.results | length > 0 and service_secrets.results[0].rc == 0
+
+    # Clean up old unversioned secrets if they exist and are no longer in use
+    - name: Clean up old unversioned secrets
+      ansible.builtin.command: docker secret rm {{ item }}
+      loop:
+        - turbogate_secret_key
+        - redis_password
+      when: 
+        - item in existing_secrets.stdout_lines
+        - new_secret_creation is succeeded
+      failed_when: false
+      ignore_errors: yes
+
+    # Create aliases for the versioned secrets (for new deployments)
+    - name: Create secret aliases for compose file compatibility
+      ansible.builtin.shell: |
+        # Check if the unversioned secret exists
+        if ! docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q "^{{ item.name }}$"; then
+          # Create a reference to the versioned secret
+          echo -n "{{ item.value }}" | docker secret create {{ item.name }} -
+        fi
+      loop:
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
+        - { name: "redis_password", value: "{{ redis_password }}" }
+      no_log: true
+      failed_when: false
 
     # Improved NGINX config management
     - name: Create NGINX configuration content
@@ -303,6 +362,26 @@
       delay: 5
       until: lb_health_check.status == 200
       failed_when: false
+
+    # Cleanup old versioned secrets after successful deployment
+    - name: List all secrets for cleanup
+      ansible.builtin.command: docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}'
+      register: all_secrets_post_deploy
+      changed_when: false
+      when: 
+        - domain_health_check.status == 200
+        - gateway_health_check.status == 200
+
+    - name: Clean up old versioned secrets (keep only current version)
+      ansible.builtin.command: docker secret rm {{ item }}
+      loop: "{{ all_secrets_post_deploy.stdout_lines }}"
+      when:
+        - all_secrets_post_deploy is defined
+        - item is regex('^(turbogate_secret_key|redis_password)_v[0-9]+$')
+        - item != 'turbogate_secret_key_v' + secret_version
+        - item != 'redis_password_v' + secret_version
+      failed_when: false
+      ignore_errors: yes
 
     # Post-deployment verification and reporting
     - name: Get comprehensive service status
