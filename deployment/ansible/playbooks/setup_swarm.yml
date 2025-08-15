@@ -1,0 +1,182 @@
+- name: Setup Docker Swarm Cluster on Hetzner Cloud
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    swarm_advertise_addr: "{{ internal_ip }}"
+    swarm_listen_addr: "{{ internal_ip }}:2377"
+    join_retries: 3
+    join_retry_delay: 10
+
+  tasks:
+    - name: Update package cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      ansible.builtin.package:
+        name:
+          - curl
+          - python3-pip
+          - netcat
+          - jq
+        state: present
+    
+
+    - name: Check if Docker is already installed
+      ansible.builtin.command: docker --version
+      register: docker_installed
+      failed_when: false
+      changed_when: false
+
+    - name: Install Docker using official script
+      ansible.builtin.get_url:
+        url: https://get.docker.com
+        dest: /tmp/get-docker.sh
+        mode: '0755'
+        timeout: 30
+      when: docker_installed.rc != 0
+
+    - name: Install Docker if not present
+      ansible.builtin.command: /tmp/get-docker.sh
+      args:
+        creates: /usr/bin/docker
+      when: docker_installed.rc != 0
+
+    - name: Remove Docker installation script
+      ansible.builtin.file:
+        path: /tmp/get-docker.sh
+        state: absent
+
+    - name: Ensure Docker service is running
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Install Python Docker module
+      ansible.builtin.pip:
+        name: 
+          - jsondiff
+          - docker>=6.0.0
+        state: present
+
+    - name: Check swarm status
+      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
+      register: swarm_state
+      failed_when: false
+      changed_when: false
+
+    - name: Debug swarm status
+      ansible.builtin.debug:
+        msg: "Node {{ ansible_hostname }} swarm state: {{ swarm_state.stdout }}"
+
+    - name: Test connectivity to manager (workers only)
+      ansible.builtin.command: ping -c 2 {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}
+      register: ping_test
+      changed_when: false
+      failed_when: false
+      when: "'workers' in group_names"
+
+    - name: Initialize swarm on manager
+      community.docker.docker_swarm:
+        state: present
+        advertise_addr: "{{ swarm_advertise_addr }}"
+        listen_addr: "{{ swarm_listen_addr }}"
+        default_addr_pool:
+          - "10.10.0.0/16"
+        subnet_size: 24
+      when:
+        - "'swarm_managers' in group_names"
+        - swarm_state.stdout != "active"
+      register: swarm_init
+
+    - name: Wait for swarm initialization
+      ansible.builtin.pause:
+        seconds: 5
+      when:
+        - "'swarm_managers' in group_names"
+        - swarm_init is changed
+
+    - name: Get worker join token
+      ansible.builtin.command: docker swarm join-token -q worker
+      register: worker_token
+      changed_when: false
+      when: "'swarm_managers' in group_names"
+
+    - name: Set worker token fact
+      ansible.builtin.set_fact:
+        docker_worker_token: "{{ worker_token.stdout }}"
+      when: "'swarm_managers' in group_names"
+
+    - name: Test manager port accessibility (simple approach)
+      ansible.builtin.command: >
+        timeout 30 bash -c 'until nc -z {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }} 2377; do sleep 2; done'
+      register: port_test
+      when: "'workers' in group_names"
+      failed_when: false
+      changed_when: false
+
+    - name: Join workers to swarm
+      community.docker.docker_swarm:
+        state: join
+        advertise_addr: "{{ swarm_advertise_addr }}"
+        join_token: "{{ hostvars[groups['swarm_managers'][0]]['docker_worker_token'] }}"
+        remote_addrs:
+          - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
+        timeout: 60
+      when:
+        - "'workers' in group_names"
+        - swarm_state.stdout == "inactive"
+        - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined
+      register: join_result
+      retries: "{{ join_retries }}"
+      delay: "{{ join_retry_delay }}"
+      until: join_result is success
+
+    - name: Verify swarm cluster
+      ansible.builtin.command: docker node ls --format "table {{ '{{' }}.Hostname{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Availability{{ '}}' }}\t{{ '{{' }}.ManagerStatus{{ '}}' }}"
+      register: swarm_nodes
+      changed_when: false
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    - name: Display cluster status
+      ansible.builtin.debug:
+        var: swarm_nodes.stdout_lines
+      when: 
+        - "'swarm_managers' in group_names"
+        - swarm_nodes is defined
+      run_once: true
+
+    - name: Create overlay network
+      community.docker.docker_network:
+        name: turbogate_network
+        driver: overlay
+        attachable: yes
+        driver_options:
+          encrypted: "true"
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    - name: Label nodes
+      community.docker.docker_node:
+        hostname: "{{ ansible_hostname }}"
+        labels:
+          role: "{{ 'manager' if 'swarm_managers' in group_names else 'worker' }}"
+          app: "turbogate"
+          environment: "production"
+      delegate_to: "{{ groups['swarm_managers'][0] }}"
+
+    - name: Final cluster status
+      ansible.builtin.command: docker system info --format '{{ '{{' }}.Swarm.Nodes{{ '}}' }} nodes in swarm'
+      register: final_status
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    - name: Success message
+      ansible.builtin.debug:
+        msg: "✅ Docker Swarm cluster setup completed successfully! {{ final_status.stdout if final_status is defined else '' }}"
+      run_once: true
