@@ -1,4 +1,5 @@
-name: Zero-Downtime Production Deployment
+name: Prod Deployment
+
 
 on:
   workflow_run:
