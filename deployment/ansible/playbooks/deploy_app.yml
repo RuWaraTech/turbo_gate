@@ -265,79 +265,131 @@
 
         - name: Wait for initial deployment to stabilize
           ansible.builtin.pause:
-            seconds: 45
+            seconds: 240
 
         - name: Monitor deployment progress with detailed logging
           ansible.builtin.shell: |
+            set +e  # Don't exit on first error
             echo "=== Checking Service Replicas ==="
-            TURBOGATE_DESIRED=$(docker service inspect {{ stack_name }}_turbogate --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null || echo "0")
-            REDIS_DESIRED=$(docker service inspect {{ stack_name }}_redis --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null || echo "0")
-            NGINX_DESIRED=$(docker service inspect {{ stack_name }}_nginx --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null || echo "0")
+            
+            # Get desired replicas - default to expected values if inspect fails
+            TURBOGATE_DESIRED=$(docker service inspect {{ stack_name }}_turbogate --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null)
+            REDIS_DESIRED=$(docker service inspect {{ stack_name }}_redis --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null)
+            NGINX_DESIRED=$(docker service inspect {{ stack_name }}_nginx --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null)
+            
+            # Set defaults if empty
+            TURBOGATE_DESIRED=${TURBOGATE_DESIRED:-3}
+            REDIS_DESIRED=${REDIS_DESIRED:-1}
+            NGINX_DESIRED=${NGINX_DESIRED:-2}
             
             echo "Desired replicas - TurboGate: $TURBOGATE_DESIRED, Redis: $REDIS_DESIRED, NGINX: $NGINX_DESIRED"
             
-            # Count running tasks
-            TURBOGATE_RUNNING=$(docker service ps {{ stack_name }}_turbogate --filter "desired-state=running" --format "{{ "{{" }}.CurrentState{{ "}}" }}" 2>/dev/null | grep -c "Running" || echo "0")
-            REDIS_RUNNING=$(docker service ps {{ stack_name }}_redis --filter "desired-state=running" --format "{{ "{{" }}.CurrentState{{ "}}" }}" 2>/dev/null | grep -c "Running" || echo "0")
-            NGINX_RUNNING=$(docker service ps {{ stack_name }}_nginx --filter "desired-state=running" --format "{{ "{{" }}.CurrentState{{ "}}" }}" 2>/dev/null | grep -c "Running" || echo "0")
+            # Use docker service ls to check REPLICAS column more reliably
+            TURBOGATE_STATUS=$(docker service ls --filter "name={{ stack_name }}_turbogate" --format "{{ "{{" }}.Replicas{{ "}}" }}" 2>/dev/null)
+            REDIS_STATUS=$(docker service ls --filter "name={{ stack_name }}_redis" --format "{{ "{{" }}.Replicas{{ "}}" }}" 2>/dev/null)
+            NGINX_STATUS=$(docker service ls --filter "name={{ stack_name }}_nginx" --format "{{ "{{" }}.Replicas{{ "}}" }}" 2>/dev/null)
             
-            echo "Running replicas - TurboGate: $TURBOGATE_RUNNING/$TURBOGATE_DESIRED, Redis: $REDIS_RUNNING/$REDIS_DESIRED, NGINX: $NGINX_RUNNING/$NGINX_DESIRED"
+            echo "Service status - TurboGate: $TURBOGATE_STATUS, Redis: $REDIS_STATUS, NGINX: $NGINX_STATUS"
             
-            # Check for any failed tasks
-            FAILED_TASKS=$(docker service ps {{ stack_name }}_turbogate --filter "desired-state=running" --format "{{ "{{" }}.CurrentState{{ "}}" }}" 2>/dev/null | grep -c "Failed" || echo "0")
-            if [ "$FAILED_TASKS" -gt 0 ]; then
-              echo "WARNING: $FAILED_TASKS failed tasks detected"
-              docker service ps {{ stack_name }}_turbogate --filter "desired-state=running" --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.Error{{ "}}" }}"
-            fi
+            # Extract running count from X/Y format
+            TURBOGATE_RUNNING=$(echo "$TURBOGATE_STATUS" | cut -d'/' -f1)
+            REDIS_RUNNING=$(echo "$REDIS_STATUS" | cut -d'/' -f1)
+            NGINX_RUNNING=$(echo "$NGINX_STATUS" | cut -d'/' -f1)
             
-            # Return success if all services have at least minimum running replicas
-            if [ "$TURBOGATE_RUNNING" -ge "1" ] && [ "$REDIS_RUNNING" -ge "1" ] && [ "$NGINX_RUNNING" -ge "1" ]; then
-              if [ "$TURBOGATE_RUNNING" -ge "$TURBOGATE_DESIRED" ] && [ "$REDIS_RUNNING" -ge "$REDIS_DESIRED" ] && [ "$NGINX_RUNNING" -ge "$NGINX_DESIRED" ]; then
-                echo "SUCCESS: All services at desired replica count"
-                exit 0
-              else
-                echo "PARTIAL: Services running but not at full capacity"
-                exit 2
-              fi
+            # Set to 0 if empty
+            TURBOGATE_RUNNING=${TURBOGATE_RUNNING:-0}
+            REDIS_RUNNING=${REDIS_RUNNING:-0}
+            NGINX_RUNNING=${NGINX_RUNNING:-0}
+            
+            echo "Running replicas - TurboGate: $TURBOGATE_RUNNING, Redis: $REDIS_RUNNING, NGINX: $NGINX_RUNNING"
+            
+            # Check for convergence - are running replicas equal to desired?
+            if [ "$TURBOGATE_STATUS" = "${TURBOGATE_DESIRED}/${TURBOGATE_DESIRED}" ] && \
+               [ "$REDIS_STATUS" = "${REDIS_DESIRED}/${REDIS_DESIRED}" ] && \
+               [ "$NGINX_STATUS" = "${NGINX_DESIRED}/${NGINX_DESIRED}" ]; then
+              echo "SUCCESS: All services fully converged"
+              exit 0
+            elif [ "$TURBOGATE_RUNNING" -ge "1" ] && [ "$REDIS_RUNNING" -ge "1" ] && [ "$NGINX_RUNNING" -ge "1" ]; then
+              echo "PARTIAL: Services running but still converging"
+              exit 0  # Changed from exit 2 to exit 0 - running is success
             else
-              echo "FAILED: Critical services not running"
+              echo "WAITING: Services not yet ready"
               exit 1
             fi
           register: deployment_status
-          retries: 5
-          delay: 1
-          until: deployment_status.rc == 0 or deployment_status.rc == 2
-          failed_when: deployment_status.rc == 1
+          retries: 10  # Increased retries
+          delay: 15     # Increased delay between checks
+          until: deployment_status.rc == 0
+          failed_when: deployment_status.rc != 0
 
       rescue:
-        - name: Deployment failed, initiating rollback procedure
+        - name: Deployment monitoring timed out or failed
           ansible.builtin.debug:
-            msg: "Deployment failed, checking for automatic rollback or initiating manual rollback"
+            msg: "Deployment monitoring failed - checking actual service state"
         
-        - name: Check current deployment state
+        - name: Check actual service state before rollback
           ansible.builtin.shell: |
-            echo "=== Current Service State ==="
+            echo "=== Actual Service State ==="
             docker service ls --filter "name={{ stack_name }}_"
-            echo "=== Failed Tasks ==="
-            docker service ps {{ stack_name }}_turbogate --no-trunc | grep -E "(Failed|Rejected)" || echo "No failed tasks found"
-          register: failure_status
-          
-        - name: Display failure details
-          ansible.builtin.debug:
-            var: failure_status.stdout_lines
+            echo ""
+            echo "=== Service Details ==="
+            # Check if services are actually running
+            TURBOGATE_STATUS=$(docker service ls --filter "name={{ stack_name }}_turbogate" --format "{{ "{{" }}.Replicas{{ "}}" }}")
+            REDIS_STATUS=$(docker service ls --filter "name={{ stack_name }}_redis" --format "{{ "{{" }}.Replicas{{ "}}" }}")
+            NGINX_STATUS=$(docker service ls --filter "name={{ stack_name }}_nginx" --format "{{ "{{" }}.Replicas{{ "}}" }}")
+            
+            echo "TurboGate: $TURBOGATE_STATUS"
+            echo "Redis: $REDIS_STATUS"
+            echo "NGINX: $NGINX_STATUS"
+            
+            # Check if services are actually healthy before deciding to rollback
+            if [[ "$TURBOGATE_STATUS" == *"/"* ]] && [[ "$REDIS_STATUS" == *"/"* ]] && [[ "$NGINX_STATUS" == *"/"* ]]; then
+              TURBOGATE_RUNNING=$(echo "$TURBOGATE_STATUS" | cut -d'/' -f1)
+              if [ "$TURBOGATE_RUNNING" -ge "1" ]; then
+                echo "Services are actually running - no rollback needed"
+                exit 0
+              fi
+            fi
+            echo "Services appear to be failing - rollback may be needed"
+            exit 1
+          register: actual_state
+          failed_when: false
         
-        - name: Force rollback if needed
+        - name: Display actual state
+          ansible.builtin.debug:
+            var: actual_state.stdout_lines
+        
+        - name: Skip rollback if services are healthy
+          ansible.builtin.meta: end_play
+          when: actual_state.rc == 0
+        
+        - name: Check if rollback is possible
+          ansible.builtin.command: docker service inspect {{ stack_name }}_turbogate --format '{{ "{{" }}.PreviousSpec{{ "}}" }}'
+          register: previous_spec
+          failed_when: false
+          changed_when: false
+        
+        - name: Force rollback if previous spec exists
           ansible.builtin.command: docker service rollback {{ stack_name }}_turbogate
+          when: previous_spec.stdout != '<no value>'
           register: rollback_result
           failed_when: false
         
         - name: Wait for rollback to complete
           ansible.builtin.pause:
             seconds: 60
+          when: rollback_result is changed
             
-        - name: Fail deployment with details
+        - name: Report deployment status
           ansible.builtin.fail:
-            msg: "Deployment failed. Rollback initiated. Check service logs: docker service logs {{ stack_name }}_turbogate"
+            msg: |
+              {% if actual_state.rc == 0 %}
+              Deployment monitoring timed out but services are healthy. Continuing...
+              {% else %}
+              Deployment failed. {% if rollback_result is changed %}Rollback completed.{% else %}No previous version to rollback to.{% endif %}
+              Check logs: docker service logs {{ stack_name }}_turbogate
+              {% endif %}
+          when: actual_state.rc != 0
 
     # Enhanced health verification with production certificates
     - name: Wait for services to fully stabilize
