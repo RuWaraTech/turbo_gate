@@ -536,3 +536,4 @@
           - "NGINX Internal: {{ 'OK' if nginx_internal_health.rc == 0 else 'Failed' }}"
           - "Monitor logs: docker service logs {{ stack_name }}_turbogate --follow"
           - "Service status: docker service ls --filter name={{ stack_name }}_"
+          
