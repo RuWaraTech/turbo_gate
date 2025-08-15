@@ -368,7 +368,7 @@ jobs:
             -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
             -e "version=${{ needs.pre-deploy-validation.outputs.version_tag }}" \
             -e "app_replicas=3" \
-            -v
+            -vvv
 
   verify-deployment:
     needs: [pre-deploy-validation, deploy-infrastructure, zero-downtime-deployment]
