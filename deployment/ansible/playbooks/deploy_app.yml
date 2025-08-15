@@ -71,10 +71,13 @@
       failed_when: false
 
     - name: Check if services are using old secrets
-      ansible.builtin.command: docker service inspect {{ item }} --format '{{ "{{" }}json .Spec.TaskTemplate.ContainerSpec.Secrets{{ "}}" }}'
+      ansible.builtin.shell: |
+        STACK_NAME="{{ stack_name }}"
+        FORMAT_SECRETS='{{json .Spec.TaskTemplate.ContainerSpec.Secrets}}'
+        docker service inspect "${STACK_NAME}_{{ item }}" --format "$FORMAT_SECRETS"
       loop:
-        - "{{ stack_name }}_turbogate"
-        - "{{ stack_name }}_redis"
+        - turbogate
+        - redis
       register: service_secrets
       failed_when: false
       changed_when: false
@@ -94,23 +97,27 @@
     - name: Update running services with new versioned secrets
       block:
         - name: Update turbogate service with new secrets
-          ansible.builtin.command: |
+          ansible.builtin.shell: |
+            STACK_NAME="{{ stack_name }}"
+            SECRET_VERSION="{{ secret_version }}"
             docker service update \
               --secret-rm turbogate_secret_key \
               --secret-rm redis_password \
-              --secret-add source=turbogate_secret_key_v{{ secret_version }},target=turbogate_secret_key \
-              --secret-add source=redis_password_v{{ secret_version }},target=redis_password \
-              {{ stack_name }}_turbogate
+              --secret-add source=turbogate_secret_key_v${SECRET_VERSION},target=turbogate_secret_key \
+              --secret-add source=redis_password_v${SECRET_VERSION},target=redis_password \
+              ${STACK_NAME}_turbogate
           register: turbogate_update
           failed_when: false
           when: "'turbogate_turbogate' in existing_secrets.stdout or '{{ stack_name }}_turbogate' in existing_secrets.stdout"
 
         - name: Update redis service with new secret
-          ansible.builtin.command: |
+          ansible.builtin.shell: |
+            STACK_NAME="{{ stack_name }}"
+            SECRET_VERSION="{{ secret_version }}"
             docker service update \
               --secret-rm redis_password \
-              --secret-add source=redis_password_v{{ secret_version }},target=redis_password \
-              {{ stack_name }}_redis
+              --secret-add source=redis_password_v${SECRET_VERSION},target=redis_password \
+              ${STACK_NAME}_redis
           register: redis_update
           failed_when: false
           when: "'turbogate_redis' in existing_secrets.stdout or '{{ stack_name }}_redis' in existing_secrets.stdout"
@@ -137,10 +144,13 @@
     # Create aliases for the versioned secrets (for new deployments)
     - name: Create secret aliases for compose file compatibility
       ansible.builtin.shell: |
+        SECRET_NAME="{{ item.name }}"
+        SECRET_VALUE="{{ item.value }}"
+        FORMAT_NAME='{{.Name}}'
         # Check if the unversioned secret exists
-        if ! docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q "^{{ item.name }}$"; then
+        if ! docker secret ls --format "$FORMAT_NAME" | grep -q "^${SECRET_NAME}$"; then
           # Create a reference to the versioned secret
-          echo -n "{{ item.value }}" | docker secret create {{ item.name }} -
+          echo -n "$SECRET_VALUE" | docker secret create "$SECRET_NAME" -
         fi
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
@@ -168,18 +178,23 @@
       register: nginx_config_creation
 
     - name: Check if nginx service exists and uses old config
-      ansible.builtin.command: docker service inspect {{ stack_name }}_nginx --format '{{ "{{" }}json .Spec.TaskTemplate.ContainerSpec.Configs{{ "}}" }}'
+      ansible.builtin.shell: |
+        STACK_NAME="{{ stack_name }}"
+        FORMAT_CONFIGS='{{json .Spec.TaskTemplate.ContainerSpec.Configs}}'
+        docker service inspect "${STACK_NAME}_nginx" --format "$FORMAT_CONFIGS"
       register: nginx_service_config
       failed_when: false
       changed_when: false
       ignore_errors: yes
 
     - name: Update nginx service with new versioned config
-      ansible.builtin.command: |
+      ansible.builtin.shell: |
+        STACK_NAME="{{ stack_name }}"
+        SECRET_VERSION="{{ secret_version }}"
         docker service update \
           --config-rm nginx_config \
-          --config-add source=nginx_config_v{{ secret_version }},target=/etc/nginx/nginx.conf \
-          {{ stack_name }}_nginx
+          --config-add source=nginx_config_v${SECRET_VERSION},target=/etc/nginx/nginx.conf \
+          ${STACK_NAME}_nginx
       when: 
         - nginx_service_config.rc == 0
         - "'nginx_config' in nginx_service_config.stdout"
@@ -236,8 +251,10 @@
       changed_when: false
 
     - name: Get current service info if stack exists
-      ansible.builtin.command: |
-        docker service inspect {{ stack_name }}_turbogate --format '{{ "{{" }}.Spec.TaskTemplate.ContainerSpec.Image{{ "}}" }}'
+      ansible.builtin.shell: |
+        STACK_NAME="{{ stack_name }}"
+        FORMAT_IMAGE='{{.Spec.TaskTemplate.ContainerSpec.Image}}'
+        docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_IMAGE"
       register: current_image
       when: stack_name in existing_stacks.stdout_lines
       failed_when: false
@@ -272,10 +289,14 @@
             set +e  # Don't exit on first error
             echo "=== Checking Service Replicas ==="
             
+            STACK_NAME="{{ stack_name }}"
+            FORMAT_REPLICAS='{{.Spec.Mode.Replicated.Replicas}}'
+            FORMAT_SERVICE_REPLICAS='{{.Replicas}}'
+            
             # Get desired replicas - default to expected values if inspect fails
-            TURBOGATE_DESIRED=$(docker service inspect {{ stack_name }}_turbogate --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null)
-            REDIS_DESIRED=$(docker service inspect {{ stack_name }}_redis --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null)
-            NGINX_DESIRED=$(docker service inspect {{ stack_name }}_nginx --format '{{ "{{" }}.Spec.Mode.Replicated.Replicas{{ "}}" }}' 2>/dev/null)
+            TURBOGATE_DESIRED=$(docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_REPLICAS" 2>/dev/null)
+            REDIS_DESIRED=$(docker service inspect "${STACK_NAME}_redis" --format "$FORMAT_REPLICAS" 2>/dev/null)
+            NGINX_DESIRED=$(docker service inspect "${STACK_NAME}_nginx" --format "$FORMAT_REPLICAS" 2>/dev/null)
             
             # Set defaults if empty
             TURBOGATE_DESIRED=${TURBOGATE_DESIRED:-3}
@@ -285,9 +306,9 @@
             echo "Desired replicas - TurboGate: $TURBOGATE_DESIRED, Redis: $REDIS_DESIRED, NGINX: $NGINX_DESIRED"
             
             # Use docker service ls to check REPLICAS column more reliably
-            TURBOGATE_STATUS=$(docker service ls --filter "name={{ stack_name }}_turbogate" --format "{{ "{{" }}.Replicas{{ "}}" }}" 2>/dev/null)
-            REDIS_STATUS=$(docker service ls --filter "name={{ stack_name }}_redis" --format "{{ "{{" }}.Replicas{{ "}}" }}" 2>/dev/null)
-            NGINX_STATUS=$(docker service ls --filter "name={{ stack_name }}_nginx" --format "{{ "{{" }}.Replicas{{ "}}" }}" 2>/dev/null)
+            TURBOGATE_STATUS=$(docker service ls --filter "name=${STACK_NAME}_turbogate" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
+            REDIS_STATUS=$(docker service ls --filter "name=${STACK_NAME}_redis" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
+            NGINX_STATUS=$(docker service ls --filter "name=${STACK_NAME}_nginx" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
             
             echo "Service status - TurboGate: $TURBOGATE_STATUS, Redis: $REDIS_STATUS, NGINX: $NGINX_STATUS"
             
@@ -329,14 +350,16 @@
         
         - name: Check actual service state before rollback
           ansible.builtin.shell: |
+            STACK_NAME="{{ stack_name }}"
+            FORMAT_SERVICE_REPLICAS='{{.Replicas}}'
             echo "=== Actual Service State ==="
-            docker service ls --filter "name={{ stack_name }}_"
+            docker service ls --filter "name=${STACK_NAME}_"
             echo ""
             echo "=== Service Details ==="
             # Check if services are actually running
-            TURBOGATE_STATUS=$(docker service ls --filter "name={{ stack_name }}_turbogate" --format "{{ "{{" }}.Replicas{{ "}}" }}")
-            REDIS_STATUS=$(docker service ls --filter "name={{ stack_name }}_redis" --format "{{ "{{" }}.Replicas{{ "}}" }}")
-            NGINX_STATUS=$(docker service ls --filter "name={{ stack_name }}_nginx" --format "{{ "{{" }}.Replicas{{ "}}" }}")
+            TURBOGATE_STATUS=$(docker service ls --filter "name=${STACK_NAME}_turbogate" --format "$FORMAT_SERVICE_REPLICAS")
+            REDIS_STATUS=$(docker service ls --filter "name=${STACK_NAME}_redis" --format "$FORMAT_SERVICE_REPLICAS")
+            NGINX_STATUS=$(docker service ls --filter "name=${STACK_NAME}_nginx" --format "$FORMAT_SERVICE_REPLICAS")
             
             echo "TurboGate: $TURBOGATE_STATUS"
             echo "Redis: $REDIS_STATUS"
@@ -364,7 +387,10 @@
           when: actual_state.rc == 0
         
         - name: Check if rollback is possible
-          ansible.builtin.command: docker service inspect {{ stack_name }}_turbogate --format '{{ "{{" }}.PreviousSpec{{ "}}" }}'
+          ansible.builtin.shell: |
+            STACK_NAME="{{ stack_name }}"
+            FORMAT_PREVIOUS='{{.PreviousSpec}}'
+            docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_PREVIOUS"
           register: previous_spec
           failed_when: false
           changed_when: false
@@ -398,7 +424,8 @@
 
     - name: Verify nginx container health directly
       ansible.builtin.shell: |
-        NGINX_CONTAINER=$(docker ps -q -f name={{ stack_name }}_nginx --filter status=running | head -1)
+        STACK_NAME="{{ stack_name }}"
+        NGINX_CONTAINER=$(docker ps -q -f name=${STACK_NAME}_nginx --filter status=running | head -1)
         if [ ! -z "$NGINX_CONTAINER" ]; then
           docker exec $NGINX_CONTAINER curl -f http://localhost/lb-health
         else
@@ -493,20 +520,23 @@
     # Post-deployment verification and reporting
     - name: Get comprehensive service status
       ansible.builtin.shell: |
+        STACK_NAME="{{ stack_name }}"
+        FORMAT_TABLE='table {{.Name}}\t{{.Node}}\t{{.CurrentState}}\t{{.DesiredState}}'
+        FORMAT_STATS='table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}'
         echo "=== Service Overview ==="
-        docker service ls --filter "name={{ stack_name }}_"
+        docker service ls --filter "name=${STACK_NAME}_"
         echo ""
         echo "=== TurboGate Service Tasks ==="
-        docker service ps {{ stack_name }}_turbogate --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
+        docker service ps "${STACK_NAME}_turbogate" --no-trunc --format "$FORMAT_TABLE"
         echo ""
         echo "=== NGINX Service Tasks ==="
-        docker service ps {{ stack_name }}_nginx --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
+        docker service ps "${STACK_NAME}_nginx" --no-trunc --format "$FORMAT_TABLE"
         echo ""
         echo "=== Redis Service Tasks ==="
-        docker service ps {{ stack_name }}_redis --no-trunc --format "table {{ "{{" }}.Name{{ "}}" }}\t{{ "{{" }}.Node{{ "}}" }}\t{{ "{{" }}.CurrentState{{ "}}" }}\t{{ "{{" }}.DesiredState{{ "}}" }}"
+        docker service ps "${STACK_NAME}_redis" --no-trunc --format "$FORMAT_TABLE"
         echo ""
         echo "=== Resource Usage ==="
-        docker stats --no-stream --format "table {{ "{{" }}.Container{{ "}}" }}\t{{ "{{" }}.CPUPerc{{ "}}" }}\t{{ "{{" }}.MemUsage{{ "}}" }}" || echo "Stats not available"
+        docker stats --no-stream --format "$FORMAT_STATS" || echo "Stats not available"
       register: detailed_status
       changed_when: false
     
@@ -536,4 +566,3 @@
           - "NGINX Internal: {{ 'OK' if nginx_internal_health.rc == 0 else 'Failed' }}"
           - "Monitor logs: docker service logs {{ stack_name }}_turbogate --follow"
           - "Service status: docker service ls --filter name={{ stack_name }}_"
-          
