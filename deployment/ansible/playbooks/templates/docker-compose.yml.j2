@@ -70,11 +70,11 @@ services:
         max_attempts: 3
       resources:
         limits:
-          cpus: '0.6'
-          memory: 1024M
+          cpus: '0.25'
+          memory: 256M
         reservations:
-          cpus: '0.3'
-          memory: 512M
+          cpus: '0.1'
+          memory: 128M
     entrypoint: ["/bin/sh", "-c"]
     command: ["redis-server --requirepass \"$$(cat /run/secrets/redis_password)\""]
     secrets:
