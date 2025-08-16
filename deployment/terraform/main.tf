@@ -267,14 +267,3 @@ resource "local_file" "ansible_inventory" {
   })
   filename = "${path.module}/../ansible/inventory/production.yml"
 }
-
-# Output for debugging
-output "all_network_ips" {
-  value = {
-    manager_public = hcloud_server.manager.ipv4_address
-    manager_internal = [for net in hcloud_server.manager.network : net.ip][0]
-    workers_public = [for s in hcloud_server.worker : s.ipv4_address]
-    workers_internal = [for s in hcloud_server.worker : [for net in s.network : net.ip][0]]
-  }
-  description = "All network IPs for verification"
-}
