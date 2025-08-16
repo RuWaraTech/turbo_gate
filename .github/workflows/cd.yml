@@ -282,6 +282,13 @@ jobs:
             fi
           done
       
+      - name: Harden servers
+        working-directory: deployment/ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          ansible-playbook -i inventory/production.yml playbooks/harden_server.yml -v -e "ssh_public_key='${{ secrets.SSH_PUBLIC_KEY }}'"
+
       - name: Install and configure Fail2Ban
         working-directory: deployment/ansible
         env:

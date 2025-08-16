@@ -156,25 +156,9 @@ resource "hcloud_server" "bastion" {
 
   user_data = <<-EOF
     #!/bin/bash
+    set -e
     apt-get update
-    apt-get install -y fail2ban ufw
-
-    # Configure fail2ban
-    cat > /etc/fail2ban/jail.local <<-EOC
-    [sshd]
-    enabled = true
-    maxretry = 3
-    bantime = 3600
-    EOC
-
-    systemctl enable fail2ban
-    systemctl start fail2ban
-
-    # Configure UFW
-    ufw default deny incoming
-    ufw default allow outgoing
-    ufw allow from ${join(" ", var.admin_ips)} to any port 22
-    ufw --force enable
+    apt-get install -y python3 python3-pip net-tools
   EOF
 
   labels = {
@@ -214,120 +198,11 @@ resource "hcloud_server" "manager" {
   user_data = <<-EOF
     #!/bin/bash
     set -e
-
-    # Update system
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
-
-    # Install security tools
-    apt-get install -y python3 python3-pip net-tools fail2ban aide rkhunter lynis unattended-upgrades
-
-    # NEW: Create non-root user for deployment
-    useradd -m -s /bin/bash -G sudo deploy
-    echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
-
-    # NEW: Copy SSH keys to deploy user
-    mkdir -p /home/deploy/.ssh
-    cp /root/.ssh/authorized_keys /home/deploy/.ssh/
-    chown -R deploy:deploy /home/deploy/.ssh
-    chmod 700 /home/deploy/.ssh
-    chmod 600 /home/deploy/.ssh/authorized_keys
-
-    # NEW: Harden SSH
-    cat > /etc/ssh/sshd_config.d/99-hardening.conf <<-SSC
-    PermitRootLogin no
-    PasswordAuthentication no
-    PubkeyAuthentication yes
-    MaxAuthTries 3
-    MaxSessions 2
-    ClientAliveInterval 300
-    ClientAliveCountMax 2
-    AllowUsers deploy
-    Protocol 2
-    X11Forwarding no
-    PermitEmptyPasswords no
-    ChallengeResponseAuthentication no
-    UsePAM yes
-    SSC
-
-    # NEW: Configure fail2ban
-    cat > /etc/fail2ban/jail.local <<-FBC
-    [DEFAULT]
-    bantime = 3600
-    findtime = 600
-    maxretry = 3
-
-    [sshd]
-    enabled = true
-    port = 22
-    filter = sshd
-    logpath = /var/log/auth.log
-    FBC
-
-    # NEW: Enable automatic security updates
-    cat > /etc/apt/apt.conf.d/50unattended-upgrades <<-UAC
-    Unattended-Upgrade::Allowed-Origins {
-        "\${distro_id}:\${distro_codename}-security";
-    };
-    Unattended-Upgrade::AutoFixInterruptedDpkg "true";
-    Unattended-Upgrade::MinimalSteps "true";
-    Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
-    Unattended-Upgrade::Remove-Unused-Dependencies "true";
-    Unattended-Upgrade::Automatic-Reboot "false";
-    UAC
-
-    # NEW: Configure kernel security parameters
-    cat >> /etc/sysctl.d/99-security.conf <<-KSC
-    # IP Spoofing protection
-    net.ipv4.conf.all.rp_filter = 1
-    net.ipv4.conf.default.rp_filter = 1
-
-    # Ignore ICMP redirects
-    net.ipv4.conf.all.accept_redirects = 0
-    net.ipv6.conf.all.accept_redirects = 0
-
-    # Ignore send redirects
-    net.ipv4.conf.all.send_redirects = 0
-
-    # Disable source packet routing
-    net.ipv4.conf.all.accept_source_route = 0
-    net.ipv6.conf.all.accept_source_route = 0
-
-    # Log Martians
-    net.ipv4.conf.all.log_martians = 1
-
-    # Ignore ICMP ping requests
-    net.ipv4.icmp_echo_ignore_broadcasts = 1
-
-    # Ignore Directed pings
-    net.ipv4.icmp_ignore_bogus_error_responses = 1
-
-    # Enable TCP/IP SYN cookies
-    net.ipv4.tcp_syncookies = 1
-    net.ipv4.tcp_max_syn_backlog = 2048
-    net.ipv4.tcp_synack_retries = 2
-    net.ipv4.tcp_syn_retries = 5
-
-    # Disable IPv6 if not needed
-    net.ipv6.conf.all.disable_ipv6 = 1
-    net.ipv6.conf.default.disable_ipv6 = 1
-    KSC
-
-    # Apply sysctl settings
-    sysctl -p /etc/sysctl.d/99-security.conf
-
-    # Add hosts entries
+    apt-get install -y python3 python3-pip net-tools
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
     echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
     echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
-
-    # NEW: Initialize AIDE (file integrity monitoring)
-    aideinit
-
-    # Restart SSH with new config
-    systemctl restart sshd
-    systemctl enable fail2ban
-    systemctl start fail2ban
   EOF
   
   labels = {
@@ -354,102 +229,11 @@ resource "hcloud_server" "worker" {
   user_data = <<-EOF
     #!/bin/bash
     set -e
-
-    # Update system
     apt-get update
-    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
-
-    # Install security tools
-    apt-get install -y python3 python3-pip net-tools fail2ban aide rkhunter lynis unattended-upgrades
-
-    # Create non-root user
-    useradd -m -s /bin/bash -G sudo deploy
-    echo "deploy ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/deploy
-
-    # Copy SSH keys to deploy user
-    mkdir -p /home/deploy/.ssh
-    cp /root/.ssh/authorized_keys /home/deploy/.ssh/
-    chown -R deploy:deploy /home/deploy/.ssh
-    chmod 700 /home/deploy/.ssh
-    chmod 600 /home/deploy/.ssh/authorized_keys
-
-    # Harden SSH (same config as manager)
-    cat > /etc/ssh/sshd_config.d/99-hardening.conf <<-SSC
-    PermitRootLogin no
-    PasswordAuthentication no
-    PubkeyAuthentication yes
-    MaxAuthTries 3
-    MaxSessions 2
-    ClientAliveInterval 300
-    ClientAliveCountMax 2
-    AllowUsers deploy
-    Protocol 2
-    X11Forwarding no
-    PermitEmptyPasswords no
-    ChallengeResponseAuthentication no
-    UsePAM yes
-    SSC
-
-    # Configure fail2ban
-    cat > /etc/fail2ban/jail.local <<-FBC
-    [DEFAULT]
-    bantime = 3600
-    findtime = 600
-    maxretry = 3
-
-    [sshd]
-    enabled = true
-    port = 22
-    filter = sshd
-    logpath = /var/log/auth.log
-    FBC
-
-    # Enable automatic security updates
-    cat > /etc/apt/apt.conf.d/50unattended-upgrades <<-UAC
-    Unattended-Upgrade::Allowed-Origins {
-        "\${distro_id}:\${distro_codename}-security";
-    };
-    Unattended-Upgrade::AutoFixInterruptedDpkg "true";
-    Unattended-Upgrade::MinimalSteps "true";
-    Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
-    Unattended-Upgrade::Remove-Unused-Dependencies "true";
-    Unattended-Upgrade::Automatic-Reboot "false";
-    UAC
-
-    # Configure kernel security parameters (same as manager)
-    cat >> /etc/sysctl.d/99-security.conf <<-KSC
-    net.ipv4.conf.all.rp_filter = 1
-    net.ipv4.conf.default.rp_filter = 1
-    net.ipv4.conf.all.accept_redirects = 0
-    net.ipv6.conf.all.accept_redirects = 0
-    net.ipv4.conf.all.send_redirects = 0
-    net.ipv4.conf.all.accept_source_route = 0
-    net.ipv6.conf.all.accept_source_route = 0
-    net.ipv4.conf.all.log_martians = 1
-    net.ipv4.icmp_echo_ignore_broadcasts = 1
-    net.ipv4.icmp_ignore_bogus_error_responses = 1
-    net.ipv4.tcp_syncookies = 1
-    net.ipv4.tcp_max_syn_backlog = 2048
-    net.ipv4.tcp_synack_retries = 2
-    net.ipv4.tcp_syn_retries = 5
-    net.ipv6.conf.all.disable_ipv6 = 1
-    net.ipv6.conf.default.disable_ipv6 = 1
-    KSC
-
-    sysctl -p /etc/sysctl.d/99-security.conf
-
-    # Add hosts entries
+    apt-get install -y python3 python3-pip net-tools
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
     echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
     echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
-
-    # Initialize AIDE
-    aideinit
-
-    # Restart services
-    systemctl restart sshd
-    systemctl enable fail2ban
-    systemctl start fail2ban
   EOF
   
   labels = {

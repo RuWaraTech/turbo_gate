@@ -1,0 +1,107 @@
+---
+- name: Harden Server Configuration
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Update apt cache and upgrade packages
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Install security tools
+      ansible.builtin.apt:
+        name:
+          - aide
+          - rkhunter
+          - lynis
+          - unattended-upgrades
+          - ufw
+        state: present
+
+    - name: Create non-root user for deployment
+      ansible.builtin.user:
+        name: deploy
+        shell: /bin/bash
+        groups: sudo
+        append: yes
+
+    - name: Allow 'deploy' user to have passwordless sudo
+      ansible.builtin.lineinfile:
+        path: /etc/sudoers.d/deploy
+        line: 'deploy ALL=(ALL) NOPASSWD:ALL'
+        create: yes
+        validate: 'visudo -cf %s'
+
+    - name: Set up authorized keys for the deploy user
+      ansible.posix.authorized_key:
+        user: deploy
+        key: "{{ ssh_public_key }}"
+
+    - name: Harden SSH configuration
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/99-hardening.conf
+        content: |
+          PermitRootLogin no
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+          MaxAuthTries 3
+          MaxSessions 2
+          ClientAliveInterval 300
+          ClientAliveCountMax 2
+          AllowUsers deploy
+          Protocol 2
+          X11Forwarding no
+          PermitEmptyPasswords no
+          ChallengeResponseAuthentication no
+          UsePAM yes
+        notify: Restart sshd
+
+    - name: Configure unattended upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        content: |
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}-security";
+          };
+          Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+          Unattended-Upgrade::MinimalSteps "true";
+          Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          Unattended-Upgrade::Automatic-Reboot "false";
+
+    - name: Configure kernel security parameters
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/99-security.conf
+        content: |
+          net.ipv4.conf.all.rp_filter = 1
+          net.ipv4.conf.default.rp_filter = 1
+          net.ipv4.conf.all.accept_redirects = 0
+          net.ipv6.conf.all.accept_redirects = 0
+          net.ipv4.conf.all.send_redirects = 0
+          net.ipv4.conf.all.accept_source_route = 0
+          net.ipv6.conf.all.accept_source_route = 0
+          net.ipv4.conf.all.log_martians = 1
+          net.ipv4.icmp_echo_ignore_broadcasts = 1
+          net.ipv4.icmp_ignore_bogus_error_responses = 1
+          net.ipv4.tcp_syncookies = 1
+          net.ipv4.tcp_max_syn_backlog = 2048
+          net.ipv4.tcp_synack_retries = 2
+          net.ipv4.tcp_syn_retries = 5
+          net.ipv6.conf.all.disable_ipv6 = 1
+          net.ipv6.conf.default.disable_ipv6 = 1
+      notify: Apply sysctl
+
+    - name: Initialize AIDE
+      ansible.builtin.command: aideinit
+      args:
+        creates: /var/lib/aide/aide.db.new
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
+
+    - name: Apply sysctl
+      ansible.builtin.command: sysctl -p /etc/sysctl.d/99-security.conf
