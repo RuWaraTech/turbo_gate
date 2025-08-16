@@ -106,6 +106,14 @@ resource "hcloud_server" "manager" {
     #!/bin/bash
     apt-get update
     apt-get install -y python3 python3-pip net-tools
+
+    # Harden SSH configuration
+    sed -i 's/^#?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    sed -i 's/^#?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+
+    # Restart SSH service to apply changes
+    systemctl restart sshd
+
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
     echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
     echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
@@ -136,6 +144,14 @@ resource "hcloud_server" "worker" {
     #!/bin/bash
     apt-get update
     apt-get install -y python3 python3-pip net-tools
+
+    # Harden SSH configuration
+    sed -i 's/^#?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    sed -i 's/^#?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+
+    # Restart SSH service to apply changes
+    systemctl restart sshd
+
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
     echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
     echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts

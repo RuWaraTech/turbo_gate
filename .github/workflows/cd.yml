@@ -282,6 +282,13 @@ jobs:
             fi
           done
       
+      - name: Install and configure Fail2Ban
+        working-directory: deployment/ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          ansible-playbook -i inventory/production.yml playbooks/setup_fail2ban.yml -v
+
       - name: Verify Swarm Status
         uses: appleboy/ssh-action@v1.0.0
         with:
