@@ -4,7 +4,10 @@ data "http" "github_meta" {
 
 locals {
   github_meta = jsondecode(data.http.github_meta.response_body)
-  github_actions_ips = local.github_meta.actions
+    github_actions_ips = [
+    for ip in local.github_meta.actions : 
+    ip if can(regex("^\\d+\\.\\d+\\.\\d+\\.\\d+", ip))  # Matches IPv4 only
+  ]
 }
 
 provider "hcloud" {
