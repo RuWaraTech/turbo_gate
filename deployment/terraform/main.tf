@@ -136,11 +136,9 @@ resource "hcloud_firewall" "main" {
   }
 
   # NEW: Block all other outbound traffic by default
-  apply_to = [
-    {
-      label_selector = "app=turbogate"
-    }
-  ]
+  apply_to {
+  label_selector = "app=turbogate"
+  }
 }
 
 # NEW: Bastion Host (optional but recommended)
