@@ -33,7 +33,7 @@ variable "admin_ips" {
   description = "List of admin IP addresses for SSH access"
   type        = list(string)
   default = [
-    "86.28.208.241/32" # <-- Add your IP here
+    "86.28.208.241/32" # <---  Add your IP here
   ]
 }
 
