@@ -29,3 +29,16 @@ variable "domain_name" {
   default     = "turbogate.app"
 }
 
+variable "admin_ips" {
+  description = "List of admin IP addresses for SSH access"
+  type        = list(string)
+  default = [
+    "YOUR_IP_HERE/32" # <-- Add your IP here
+  ]
+}
+
+variable "enable_bastion" {
+  description = "Enable a bastion host for secure access"
+  type        = bool
+  default     = false
+}
