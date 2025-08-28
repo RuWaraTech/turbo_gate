@@ -1,3 +1,9 @@
+## v0.6.3 (2025-08-28)
+
+### fix
+
+- Ansible inventory generation with static IPs and security configurations
+
 ## v0.6.2 (2025-08-28)
 
 ### fix
