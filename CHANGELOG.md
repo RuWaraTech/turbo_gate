@@ -1,3 +1,9 @@
+## v0.4.0 (2025-08-28)
+
+### feat
+
+- add unattended upgrades and fail2ban configuration templates
+
 ## v0.3.0 (2025-08-28)
 
 ### feat
