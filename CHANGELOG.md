@@ -1,3 +1,9 @@
+## v0.4.1 (2025-08-28)
+
+### fix
+
+- add dependency on main firewall for worker nodes
+
 ## v0.4.0 (2025-08-28)
 
 ### feat
