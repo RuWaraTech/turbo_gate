@@ -1,3 +1,9 @@
+## v0.5.1 (2025-08-28)
+
+### refactor
+
+- remove Terraform destroy step from CD workflow
+
 ## v0.5.0 (2025-08-28)
 
 ### feat
