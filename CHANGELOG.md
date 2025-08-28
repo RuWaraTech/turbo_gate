@@ -1,3 +1,9 @@
+## v0.7.2 (2025-08-28)
+
+### refactor
+
+- remove old unencrypted turbogate_network cleanup task
+
 ## v0.7.1 (2025-08-28)
 
 ### fix
