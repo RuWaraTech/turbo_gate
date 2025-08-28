@@ -161,14 +161,106 @@
       when: "'swarm_managers' in group_names"
       run_once: true
 
-    - name: Label nodes
+    # Enhanced Docker Swarm Security Tasks
+    - name: Create encrypted overlay networks with security
+      community.docker.docker_network:
+        name: "turbogate_{{ item.key }}"
+        driver: overlay
+        attachable: yes
+        driver_options:
+          encrypted: "{{ item.value.encrypted | string }}"
+        ipam_config:
+          - subnet: "{{ item.value.subnet }}"
+        labels:
+          security_zone: "{{ item.key }}"
+          encrypted: "{{ item.value.encrypted | string }}"
+          managed_by: "ansible"
+      loop: "{{ swarm_networks | dict2items }}"
+      when: 
+        - "'swarm_managers' in group_names"
+        - swarm_encryption_enabled | default(true)
+      run_once: true
+
+    - name: Remove old unencrypted turbogate_network if exists
+      community.docker.docker_network:
+        name: turbogate_network
+        state: absent
+        force: yes
+      when: "'swarm_managers' in group_names"
+      run_once: true
+      ignore_errors: yes
+
+    - name: Label nodes with security context
       community.docker.docker_node:
         hostname: "{{ ansible_hostname }}"
         labels:
           role: "{{ 'manager' if 'swarm_managers' in group_names else 'worker' }}"
           app: "turbogate"
           environment: "production"
+          security_hardened: "{{ security_enabled | default('true') }}"
+          security_zone: "{{ 'dmz' if 'swarm_managers' in group_names else 'internal' }}"
+          fail2ban_enabled: "{{ fail2ban_enabled | default('true') }}"
+          network_segment: "{{ 'management' if 'swarm_managers' in group_names else 'application' }}"
       delegate_to: "{{ groups['swarm_managers'][0] }}"
+
+    # Security verification tasks
+    - name: Verify Docker daemon security configuration
+      shell: |
+        docker system info --format '{{ "{{" }}.SecurityOptions{{ "}}" }}' | grep -q "name=seccomp" && \
+        docker system info --format '{{ "{{" }}.LiveRestoreEnabled{{ "}}" }}' | grep -q "true"
+      register: docker_security_check
+      failed_when: false
+      changed_when: false
+      when: "'swarm_managers' in group_names"
+
+    - name: Display Docker security status
+      debug:
+        msg: 
+          - "Docker security features: {{ 'Enabled' if docker_security_check.rc == 0 else 'Needs attention' }}"
+          - "Swarm encryption: {{ 'Enabled' if swarm_encryption_enabled else 'Disabled' }}"
+          - "Security hardening: {{ 'Applied' if security_enabled else 'Skipped' }}"
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    # Network security verification
+    - name: Verify encrypted overlay networks
+      command: docker network ls --filter driver=overlay --format '{{ "{{" }}.Name{{ "}}" }} {{ "{{" }}.Options{{ "}}" }}'
+      register: overlay_networks
+      changed_when: false
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    - name: Display network security status
+      debug:
+        msg: "Overlay networks: {{ overlay_networks.stdout_lines }}"
+      when: 
+        - "'swarm_managers' in group_names"
+        - overlay_networks is defined
+      run_once: true
+
+    # Security health check
+    - name: Final security verification
+      block:
+        - name: Check fail2ban status
+          command: systemctl is-active fail2ban
+          register: fail2ban_status
+          failed_when: false
+          changed_when: false
+
+        - name: Check SSH hardening
+          shell: grep -q "PasswordAuthentication no" /etc/ssh/sshd_config
+          register: ssh_hardening_check
+          failed_when: false
+          changed_when: false
+
+        - name: Security status summary
+          debug:
+            msg:
+              - "=== Security Status Summary ==="
+              - "fail2ban: {{ 'Active' if fail2ban_status.rc == 0 else 'Inactive' }}"
+              - "SSH hardening: {{ 'Applied' if ssh_hardening_check.rc == 0 else 'Not applied' }}"
+              - "Docker Swarm: {{ 'Secure' if docker_security_check.rc == 0 else 'Review needed' }}"
+              - "Encrypted networks: {{ swarm_networks.keys() | list | join(', ') }}"
 
     - name: Final cluster status
       ansible.builtin.command: docker system info --format '{{ '{{' }}.Swarm.Nodes{{ '}}' }} nodes in swarm'
@@ -178,5 +270,5 @@
 
     - name: Success message
       ansible.builtin.debug:
-        msg: "✅ Docker Swarm cluster setup completed successfully! {{ final_status.stdout if final_status is defined else '' }}"
+        msg: "Docker Swarm cluster setup completed successfully! {{ final_status.stdout if final_status is defined else '' }}"
       run_once: true
