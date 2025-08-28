@@ -21,6 +21,97 @@ resource "hcloud_network_subnet" "main" {
   ip_range     = "10.0.1.0/24"
 }
 
+# Additional network subnets for security segmentation
+resource "hcloud_network_subnet" "application" {
+  network_id   = hcloud_network.main.id
+  type         = "cloud"
+  network_zone = "eu-central"  
+  ip_range     = "10.0.2.0/24"
+
+}
+
+resource "hcloud_network_subnet" "database" {
+  network_id   = hcloud_network.main.id
+  type         = "cloud"
+  network_zone = "eu-central"
+  ip_range     = "10.0.3.0/24"
+  
+}
+
+# Enhanced firewalls with granular rules
+resource "hcloud_firewall" "ssh_access" {
+  name = "turbogate-ssh-fw"
+  
+  rule {
+    direction   = "in"
+    protocol    = "tcp"
+    port        = "22"
+    source_ips  = var.allowed_ssh_ips
+    description = "SSH access from allowed IPs only"
+  }
+  
+  rule {
+    direction   = "in"
+    protocol    = "icmp"
+    source_ips  = ["10.0.0.0/16"]
+    description = "Internal ICMP"
+  }
+  
+  labels = {
+    purpose     = "ssh-security"
+    environment = var.environment
+  }
+}
+
+resource "hcloud_firewall" "docker_swarm_enhanced" {
+  name = "turbogate-swarm-enhanced-fw"
+  
+  # Docker Swarm manager API - more restrictive
+  rule {
+    direction   = "in"
+    protocol    = "tcp"
+    port        = "2377"
+    source_ips  = ["10.0.1.0/24", "10.0.2.0/24"]  # Only management and app subnets
+    description = "Docker Swarm manager API - restricted"
+  }
+  
+  # Container network discovery TCP
+  rule {
+    direction   = "in"
+    protocol    = "tcp"
+    port        = "7946"
+    source_ips  = ["10.0.1.0/24", "10.0.2.0/24"]
+    description = "Container network discovery TCP"
+  }
+  
+  # Container network discovery UDP
+  rule {
+    direction   = "in"
+    protocol    = "udp"
+    port        = "7946"
+    source_ips  = ["10.0.1.0/24", "10.0.2.0/24"]
+    description = "Container network discovery UDP"
+  }
+  
+  # Overlay network traffic (VXLAN)
+  rule {
+    direction   = "in"
+    protocol    = "udp"
+    port        = "4789"
+    source_ips  = ["10.0.1.0/24", "10.0.2.0/24"]
+    description = "Overlay network VXLAN"
+  }
+  
+  labels = {
+    purpose     = "docker-swarm-enhanced"
+    environment = var.environment
+  }
+}
+
+
+
+
+
 # Firewall - Enhanced for Docker Swarm
 resource "hcloud_firewall" "main" {
   name = "turbogate-firewall"

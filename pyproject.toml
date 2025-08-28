@@ -46,7 +46,7 @@ werkzeug = "^3.0.1"
 structlog = "^23.2.0"
 python-json-logger = "^2.0.7"
 click = "^8.1.7"
-gevent = "^25.5.1"
+gevent = "25.5.1"
 
 [tool.poetry.group.dev.dependencies]
 commitizen = "^4.8.3"
