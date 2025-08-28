@@ -1,3 +1,9 @@
+## v0.3.0 (2025-08-28)
+
+### feat
+
+- enhanced server security with multiple firewalls and basic hardening
+
 ## v0.2.0 (2025-08-28)
 
 ### feat
