@@ -1,3 +1,9 @@
+## v0.5.0 (2025-08-28)
+
+### feat
+
+- add Terraform destroy step
+
 ## v0.4.1 (2025-08-28)
 
 ### fix

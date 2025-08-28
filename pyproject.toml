@@ -21,7 +21,7 @@ classifiers = [
 
 [tool.poetry]
 name = "gateway_service"
-version = "0.4.1"
+version = "0.5.0"
 description = "TurboGate - High-performance Flask API Gateway for microservices"
 authors = ["Farai Wande <faraiwande@gmail.com>"]
 license = "MIT"
@@ -77,7 +77,7 @@ health-check = "scripts.health_check:main"
 name = "cz_customize"
 tag_format = "v$version"
 version_scheme = "semver2"
-version = "0.4.1"
+version = "0.5.0"
 version_files = [
     "pyproject.toml:version",
     "gateway_service/__init__.py:__version__"
