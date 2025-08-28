@@ -1,3 +1,9 @@
+## v0.6.1 (2025-08-28)
+
+### refactor
+
+- update inventory template for dynamic IP assignment and security configurations
+
 ## v0.6.0 (2025-08-28)
 
 ### feat
