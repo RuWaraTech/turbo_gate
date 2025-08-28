@@ -1,3 +1,14 @@
+## v0.6.0 (2025-08-28)
+
+### feat
+
+- add Terraform destroy step to CI/CD workflow
+- add security hardening playbook for TurboGate infrastructure
+
+### refactor
+
+- remove Terraform destroy step from CI/CD workflow
+
 ## v0.5.1 (2025-08-28)
 
 ### refactor
