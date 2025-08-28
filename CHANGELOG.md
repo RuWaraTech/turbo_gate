@@ -1,3 +1,9 @@
+## v0.7.1 (2025-08-28)
+
+### fix
+
+- convert boolean values to strings for Docker node labels
+
 ## v0.7.0 (2025-08-28)
 
 ### feat
