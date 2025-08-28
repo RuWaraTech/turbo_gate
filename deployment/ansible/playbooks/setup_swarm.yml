@@ -180,15 +180,6 @@
         - swarm_encryption_enabled | default(true)
       run_once: true
 
-    - name: Remove old unencrypted turbogate_network if exists
-      community.docker.docker_network:
-        name: turbogate_network
-        state: absent
-        force: yes
-      when: "'swarm_managers' in group_names"
-      run_once: true
-      ignore_errors: yes
-
     - name: Label nodes with security context
       community.docker.docker_node:
         hostname: "{{ ansible_hostname }}"
