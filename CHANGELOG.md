@@ -1,3 +1,9 @@
+## v0.7.0 (2025-08-28)
+
+### feat
+
+- enhance Docker Swarm security with encrypted networks and verification tasks
+
 ## v0.6.3 (2025-08-28)
 
 ### fix
