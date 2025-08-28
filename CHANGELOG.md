@@ -1,3 +1,9 @@
+## v0.6.2 (2025-08-28)
+
+### fix
+
+- add internal IPs for manager and workers in Ansible inventory generation
+
 ## v0.6.1 (2025-08-28)
 
 ### refactor
