@@ -1,0 +1,242 @@
+---
+- name: Security Hardening for TurboGate Infrastructure
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    # fail2ban configuration (can be overridden in inventory)
+    fail2ban_bantime: 3600
+    fail2ban_findtime: 600
+    fail2ban_maxretry: 5
+    ssh_maxretry: 3
+    
+    # Security packages to install
+    security_packages:
+      - fail2ban
+      - ufw
+      - unattended-upgrades
+      - aide
+      - rkhunter
+      - logwatch
+    
+    # SSH hardening settings
+    ssh_hardening:
+      permit_root_login: "prohibit-password"
+      password_authentication: "no"
+      max_auth_tries: 3
+      client_alive_interval: 300
+      client_alive_count_max: 2
+
+  pre_tasks:
+    - name: Check if cloud-init security hardening was started
+      stat:
+        path: /tmp/security-hardening-started
+      register: cloud_init_hardening
+
+    - name: Display hardening status
+      debug:
+        msg: "Cloud-init hardening: {{ 'completed' if cloud_init_hardening.stat.exists else 'not found' }}"
+
+  tasks:
+    - name: Update package cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install security packages
+      apt:
+        name: "{{ security_packages }}"
+        state: present
+        update_cache: yes
+
+    - name: Configure automatic security updates
+      template:
+        src: 50unattended-upgrades.j2
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+      notify: restart unattended-upgrades
+
+    - name: Enhanced SSH hardening
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin {{ ssh_hardening.permit_root_login }}' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication {{ ssh_hardening.password_authentication }}' }
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries {{ ssh_hardening.max_auth_tries }}' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval {{ ssh_hardening.client_alive_interval }}' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax {{ ssh_hardening.client_alive_count_max }}' }
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?AllowTcpForwarding', line: 'AllowTcpForwarding no' }
+        - { regexp: '^#?Protocol', line: 'Protocol 2' }
+        - { regexp: '^#?UseDNS', line: 'UseDNS no' }
+      notify: restart sshd
+
+    - name: Create fail2ban configuration
+      template:
+        src: jail.local.j2
+        dest: /etc/fail2ban/jail.local
+        owner: root
+        group: root
+        mode: '0644'
+        backup: yes
+      notify: restart fail2ban
+
+    - name: Create custom fail2ban filters for nginx (managers only)
+      copy:
+        content: |
+          [Definition]
+          failregex = ^<HOST> -.*"(GET|POST|HEAD).*" (4\d\d|5\d\d) \d+ ".*".*$
+          ignoreregex = ^<HOST> -.*"(GET|HEAD).*(\.css|\.js|\.png|\.jpg|\.ico|/health|/lb-health).*" 200 \d+ ".*".*$
+        dest: /etc/fail2ban/filter.d/nginx-custom.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: "'swarm_managers' in group_names"
+      notify: restart fail2ban
+
+    - name: Configure system security parameters
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        sysctl_file: /etc/sysctl.d/99-security.conf
+        reload: yes
+      loop:
+        # Network security (Docker-aware)
+        - { name: 'net.ipv4.ip_forward', value: '1' }  # Required for Docker
+        - { name: 'net.ipv4.conf.all.send_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.send_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.rp_filter', value: '1' }
+        - { name: 'net.ipv4.tcp_syncookies', value: '1' }
+        # Memory and process protection
+        - { name: 'kernel.dmesg_restrict', value: '1' }
+        - { name: 'kernel.kptr_restrict', value: '2' }
+        - { name: 'fs.protected_hardlinks', value: '1' }
+        - { name: 'fs.protected_symlinks', value: '1' }
+
+    - name: Set secure file permissions
+      file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+        owner: "{{ item.owner | default('root') }}"
+        group: "{{ item.group | default('root') }}"
+      loop:
+        - { path: '/etc/passwd', mode: '0644' }
+        - { path: '/etc/shadow', mode: '0640', group: 'shadow' }
+        - { path: '/etc/group', mode: '0644' }
+        - { path: '/etc/gshadow', mode: '0640', group: 'shadow' }
+        - { path: '/etc/ssh/sshd_config', mode: '0600' }
+
+    - name: Create security monitoring directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/log/turbogate
+        - /var/log/turbogate/nginx
+        - /var/lib/turbogate
+
+    - name: Configure log rotation for security logs
+      copy:
+        content: |
+          /var/log/fail2ban.log {
+            rotate 12
+            monthly
+            compress
+            delaycompress
+            missingok
+            notifempty
+            create 0644 root root
+          }
+          
+          /var/log/turbogate/nginx/*.log {
+            daily
+            rotate 14
+            compress
+            delaycompress
+            missingok
+            notifempty
+            create 0644 root root
+          }
+        dest: /etc/logrotate.d/turbogate-security
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Initialize AIDE (file integrity monitoring)
+      shell: |
+        if [ ! -f /var/lib/aide/aide.db ]; then
+          aideinit
+          cp /var/lib/aide/aide.db.new /var/lib/aide/aide.db || true
+        fi
+      args:
+        creates: /var/lib/aide/aide.db
+
+    - name: Schedule security monitoring tasks
+      cron:
+        name: "{{ item.name }}"
+        minute: "{{ item.minute }}"
+        hour: "{{ item.hour }}"
+        job: "{{ item.job }}"
+      loop:
+        - name: "fail2ban status check"
+          minute: "*/15"
+          hour: "*"
+          job: "systemctl is-active fail2ban > /dev/null || echo 'fail2ban down' | logger -t security"
+        - name: "AIDE integrity check"
+          minute: "30"
+          hour: "2"
+          job: "aide --check 2>&1 | logger -t aide"
+
+  handlers:
+    - name: restart sshd
+      systemd:
+        name: sshd
+        state: restarted
+
+    - name: restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
+        enabled: yes
+
+    - name: restart unattended-upgrades
+      systemd:
+        name: unattended-upgrades
+        state: restarted
+        enabled: yes
+
+  post_tasks:
+    - name: Verify security services are running
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - fail2ban
+        - unattended-upgrades
+
+    - name: Create security hardening completion marker
+      file:
+        path: /tmp/ansible-security-hardening-complete
+        state: touch
+        mode: '0644'
+
+    - name: Display security hardening summary
+      debug:
+        msg:
+          - "Security hardening completed successfully!"
+          - "fail2ban: {{ 'Running' if ansible_facts.services['fail2ban.service']['state'] == 'running' else 'Not running' }}"
+          - "SSH hardening: Applied"
+          - "Automatic updates: Configured"
+          - "File integrity monitoring: Initialized"
