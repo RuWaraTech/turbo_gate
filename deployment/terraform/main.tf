@@ -331,13 +331,48 @@ resource "hcloud_floating_ip_assignment" "main" {
 # Generate Ansible inventory
 resource "local_file" "ansible_inventory" {
   content = templatefile("${path.module}/../ansible/inventory/inventory.tpl", {
-    manager_ip   = hcloud_server.manager.ipv4_address
-    manager_internal  = [for net in hcloud_server.manager.network : net.ip][0] 
-    worker_1_ip  = hcloud_server.worker[0].ipv4_address
-    worker_1_internal = [for net in hcloud_server.worker[0].network : net.ip][0]  #
-    worker_2_ip  = hcloud_server.worker[1].ipv4_address
-    worker_2_internal = [for net in hcloud_server.worker[1].network : net.ip][0] 
-    floating_ip  = hcloud_floating_ip.main.ip_address
+    manager_ip       = hcloud_server.manager.ipv4_address
+    manager_internal = "10.0.1.10"
+    worker_1_ip      = hcloud_server.worker[0].ipv4_address
+    worker_1_internal = "10.0.1.11"
+    worker_2_ip      = hcloud_server.worker[1].ipv4_address
+    worker_2_internal = "10.0.1.12"
+    floating_ip      = hcloud_floating_ip.main.ip_address
+    
+    # Security configuration
+    security_enabled = var.enable_security_hardening
+    fail2ban_enabled = var.enable_security_hardening
+    
+    # fail2ban settings
+    fail2ban_bantime = var.fail2ban_config.bantime
+    fail2ban_findtime = var.fail2ban_config.findtime
+    fail2ban_maxretry = var.fail2ban_config.maxretry
+    ssh_maxretry = var.fail2ban_config.ssh_maxretry
+    
+    # Network segmentation
+    network_subnets = {
+      management   = "10.0.1.0/24"
+      application  = "10.0.2.0/24" 
+      database     = "10.0.3.0/24"
+      monitoring   = "10.0.4.0/24"
+    }
+    
+    # Docker Swarm security
+    swarm_encryption_enabled = true
+    swarm_networks = {
+      frontend = {
+        subnet = "172.20.0.0/24"
+        encrypted = true
+      }
+      backend = {
+        subnet = "172.20.1.0/24"
+        encrypted = true
+      }
+      database = {
+        subnet = "172.20.2.0/24"
+        encrypted = true
+      }
+    }
   })
   filename = "${path.module}/../ansible/inventory/production.yml"
 }
