@@ -27,7 +27,7 @@ resource "hcloud_network_subnet" "application" {
   type         = "cloud"
   network_zone = "eu-central"  
   ip_range     = "10.0.2.0/24"
-
+  
 }
 
 resource "hcloud_network_subnet" "database" {
@@ -108,11 +108,7 @@ resource "hcloud_firewall" "docker_swarm_enhanced" {
   }
 }
 
-
-
-
-
-# Firewall - Enhanced for Docker Swarm
+# Firewall - Enhanced for Docker Swarm (Original - kept for web traffic)
 resource "hcloud_firewall" "main" {
   name = "turbogate-firewall"
   
@@ -179,36 +175,75 @@ resource "hcloud_firewall" "main" {
   }
 }
 
-# Manager Node - Enhanced user_data for Docker Swarm
+# Manager Node - Enhanced with multiple firewalls
 resource "hcloud_server" "manager" {
   name        = "turbogate-manager"
   image       = "ubuntu-22.04"
   server_type = var.server_type
   location    = var.location
   ssh_keys    = [hcloud_ssh_key.default.id]
-  firewall_ids = [hcloud_firewall.main.id]
+  
+  # Apply multiple firewalls for layered security
+  firewall_ids = [
+    hcloud_firewall.main.id,              # Your existing firewall
+    hcloud_firewall.ssh_access.id,        # New SSH-specific firewall
+    hcloud_firewall.docker_swarm_enhanced.id  # Enhanced Docker Swarm firewall
+  ]
   
   network {
     network_id = hcloud_network.main.id
     ip         = "10.0.1.10"
   }
   
+  # Enhanced user_data with security hardening hooks
   user_data = <<-EOF
     #!/bin/bash
     apt-get update
-    apt-get install -y python3 python3-pip net-tools
+    apt-get install -y python3 python3-pip net-tools curl
+    
+    # Basic security hardening
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
     echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
     echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
+    
+    # SSH hardening
+    sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+    systemctl restart sshd
+    
+    # Install fail2ban
+    apt-get install -y fail2ban
+    systemctl enable fail2ban
+    
+    # Basic fail2ban config
+    cat > /etc/fail2ban/jail.local << 'EOL'
+[DEFAULT]
+bantime = ${var.fail2ban_config.bantime}
+findtime = ${var.fail2ban_config.findtime}
+maxretry = ${var.fail2ban_config.maxretry}
+
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = ${var.fail2ban_config.ssh_maxretry}
+EOL
+    systemctl start fail2ban
+    
+    # Create marker file for Ansible to detect hardening status
+    touch /tmp/security-hardening-started
   EOF
   
   labels = {
-    role = "manager"
-    app  = "turbogate"
+    role        = "manager"
+    app         = "turbogate"
+    environment = var.environment
+    security_hardened = var.enable_security_hardening
   }
 }
 
-# Worker Nodes - Enhanced user_data
+# Worker Nodes - Enhanced with security
 resource "hcloud_server" "worker" {
   count       = 2
   name        = "turbogate-worker-${count.index + 1}"
@@ -216,25 +251,63 @@ resource "hcloud_server" "worker" {
   server_type = var.server_type
   location    = var.location
   ssh_keys    = [hcloud_ssh_key.default.id]
-  firewall_ids = [hcloud_firewall.main.id]
+  
+  # Workers have more restrictive firewall setup (no direct web access)
+  firewall_ids = [
+    hcloud_firewall.ssh_access.id,        # SSH access
+    hcloud_firewall.docker_swarm_enhanced.id  # Docker Swarm only
+    # Note: Intentionally NOT including main firewall (no HTTP/HTTPS on workers)
+  ]
   
   network {
     network_id = hcloud_network.main.id
     ip         = "10.0.1.${11 + count.index}"
   }
   
+  # Similar security hardening for workers
   user_data = <<-EOF
     #!/bin/bash
     apt-get update
-    apt-get install -y python3 python3-pip net-tools
+    apt-get install -y python3 python3-pip net-tools curl
+    
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
     echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
     echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
+    
+    # SSH hardening
+    sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+    systemctl restart sshd
+    
+    # Install fail2ban
+    apt-get install -y fail2ban
+    systemctl enable fail2ban
+    
+    # Basic fail2ban config (worker version)
+    cat > /etc/fail2ban/jail.local << 'EOL'
+[DEFAULT]
+bantime = ${var.fail2ban_config.bantime}
+findtime = ${var.fail2ban_config.findtime}
+maxretry = ${var.fail2ban_config.maxretry}
+
+[sshd]
+enabled = true
+port = ssh
+filter = sshd
+logpath = /var/log/auth.log
+maxretry = ${var.fail2ban_config.ssh_maxretry}
+EOL
+    systemctl start fail2ban
+    
+    touch /tmp/security-hardening-started
   EOF
   
   labels = {
-    role = "worker"
-    app  = "turbogate"
+    role        = "worker"
+    app         = "turbogate"
+    environment = var.environment
+    security_hardened = var.enable_security_hardening
+    worker_id   = count.index + 1
   }
 }
 
