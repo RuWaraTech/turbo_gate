@@ -258,6 +258,10 @@ resource "hcloud_server" "worker" {
     hcloud_firewall.docker_swarm_enhanced.id  # Docker Swarm only
     # Note: Intentionally NOT including main firewall (no HTTP/HTTPS on workers)
   ]
+
+  depends_on = [
+  hcloud_firewall.main
+ ]
   
   network {
     network_id = hcloud_network.main.id
