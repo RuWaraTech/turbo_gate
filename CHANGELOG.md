@@ -1,3 +1,13 @@
+## v0.2.0 (2025-08-28)
+
+### feat
+
+- add additional network subnets and enhance firewall rules for security segmentation
+
+### fix
+
+- update gevent version specification in pyproject.toml to the latest build of this failing will need to change this back down the line
+
 ## v0.1.0 (2025-08-28)
 
 ### feat
