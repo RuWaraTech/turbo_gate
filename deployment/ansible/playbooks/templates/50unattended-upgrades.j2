@@ -1,0 +1,51 @@
+
+Unattended-Upgrade::Allowed-Origins {
+    "${distro_id}:${distro_codename}";
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+
+// Automatically upgrade packages from these repositories
+Unattended-Upgrade::Package-Whitelist {
+    // Security updates are always allowed
+};
+
+// Do NOT automatically upgrade these packages
+Unattended-Upgrade::Package-Blacklist {
+    // Prevent Docker from auto-updating to avoid breaking changes
+    "docker-ce";
+    "docker-ce-cli";
+    "containerd.io";
+    // Prevent kernel updates that require reboot
+    "linux-image.*";
+    "linux-headers.*";
+    "linux-modules.*";
+};
+
+// Automatically remove unused kernel packages
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "{{ remove_unused_kernels | default('true') }}";
+
+// Remove unused dependencies
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "{{ remove_unused_deps | default('true') }}";
+
+// Reboot settings
+Unattended-Upgrade::Automatic-Reboot "{{ automatic_reboot | default('false') }}";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+Unattended-Upgrade::Automatic-Reboot-Time "{{ reboot_time | default('02:00') }}";
+
+// Email notifications
+Unattended-Upgrade::Mail "{{ notification_email | default('root') }}";
+Unattended-Upgrade::MailReport "{{ mail_report | default('on-change') }}";
+
+// Logging
+Unattended-Upgrade::SyslogEnable "true";
+Unattended-Upgrade::SyslogFacility "daemon";
+
+// Download and install upgrades
+Unattended-Upgrade::MinimalSteps "true";
+Unattended-Upgrade::InstallOnShutdown "false";
+
+// Bandwidth and timing
+Unattended-Upgrade::Skip-Updates-On-Metered-Connections "true";
