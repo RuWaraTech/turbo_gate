@@ -161,19 +161,18 @@
       when: "'swarm_managers' in group_names"
       run_once: true
 
-    # Enhanced Docker Swarm Security Tasks
     - name: Create encrypted overlay networks with security
       community.docker.docker_network:
         name: "turbogate_{{ item.key }}"
         driver: overlay
         attachable: yes
         driver_options:
-          encrypted: "{{ item.value.encrypted | string }}"
+          encrypted: "{{ item.value.encrypted | string }}"  # Ensure string conversion
         ipam_config:
           - subnet: "{{ item.value.subnet }}"
         labels:
           security_zone: "{{ item.key }}"
-          encrypted: "{{ item.value.encrypted | string }}"
+          encrypted: "{{ item.value.encrypted | string }}"  # Ensure string conversion
           managed_by: "ansible"
       loop: "{{ swarm_networks | dict2items }}"
       when: 
@@ -197,9 +196,9 @@
           role: "{{ 'manager' if 'swarm_managers' in group_names else 'worker' }}"
           app: "turbogate"
           environment: "production"
-          security_hardened: "{{ security_enabled | default('true') }}"
+          security_hardened: "{{ (security_enabled | default(true)) | string }}"
           security_zone: "{{ 'dmz' if 'swarm_managers' in group_names else 'internal' }}"
-          fail2ban_enabled: "{{ fail2ban_enabled | default('true') }}"
+          fail2ban_enabled: "{{ (fail2ban_enabled | default(true)) | string }}"
           network_segment: "{{ 'management' if 'swarm_managers' in group_names else 'application' }}"
       delegate_to: "{{ groups['swarm_managers'][0] }}"
 
