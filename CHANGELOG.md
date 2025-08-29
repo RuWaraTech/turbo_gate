@@ -1,3 +1,9 @@
+## v0.7.21 (2025-08-29)
+
+### fix
+
+- remove read_only option from nginx service in docker-compose template
+
 ## v0.7.20 (2025-08-29)
 
 ### fix
