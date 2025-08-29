@@ -1,3 +1,9 @@
+## v0.7.9 (2025-08-29)
+
+### fix
+
+- update redis service networks from turbogate_backend to turbogate_database
+
 ## v0.7.8 (2025-08-29)
 
 ### fix
