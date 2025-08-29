@@ -1,3 +1,9 @@
+## v0.7.7 (2025-08-29)
+
+### refactor
+
+- add tmpfs for cache directory in docker-compose
+
 ## v0.7.6 (2025-08-29)
 
 ### refactor
