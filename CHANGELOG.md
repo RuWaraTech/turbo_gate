@@ -1,3 +1,9 @@
+## v0.7.13 (2025-08-29)
+
+### fix
+
+- remove unnecessary user specification for nginx service in docker-compose
+
 ## v0.7.12 (2025-08-29)
 
 ### fix
