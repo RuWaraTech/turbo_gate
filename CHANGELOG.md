@@ -1,3 +1,9 @@
+## v0.7.17 (2025-08-29)
+
+### fix
+
+- ensure nginx_config alias is created before deleting temporary file for compatibility
+
 ## v0.7.16 (2025-08-29)
 
 ### fix
