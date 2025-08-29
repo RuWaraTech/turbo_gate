@@ -33,6 +33,20 @@
         - /var/lib/turbogate/redis
         - /var/log/turbogate/nginx
         - /var/cache/nginx
+
+    - name: Create NGINX cache subdirectories with correct permissions
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: 101
+        group: 101
+        mode: '0755'
+      loop:
+        - /var/cache/nginx/client_temp
+        - /var/cache/nginx/proxy_temp
+        - /var/cache/nginx/fastcgi_temp
+        - /var/cache/nginx/uwsgi_temp
+        - /var/cache/nginx/scgi_temp      
         
     - name: Set correct ownership for NGINX cache directory
       ansible.builtin.file:

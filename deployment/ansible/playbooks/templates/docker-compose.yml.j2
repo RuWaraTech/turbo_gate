@@ -181,6 +181,7 @@ services:
       - /var/run
       - /run 
       - /run/nginx:uid=101,gid=101,mode=755 
+      - /var/cache/nginx:uid=101,gid=101,mode=755
     security_opt:
       - no-new-privileges:true
     cap_drop:
