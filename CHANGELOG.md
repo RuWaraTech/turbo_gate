@@ -1,3 +1,9 @@
+## v0.7.20 (2025-08-29)
+
+### fix
+
+- update healthcheck endpoint and improve nginx temporary cache paths
+
 ## v0.7.19 (2025-08-29)
 
 ### fix
