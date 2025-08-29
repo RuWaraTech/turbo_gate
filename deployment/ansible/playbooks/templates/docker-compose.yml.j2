@@ -62,7 +62,10 @@ services:
       - redis
     # Security enhancements
     user: "1001:1001"  # Non-root user
-    read_only: true    # Read-only root filesystem
+    tmpfs:
+      - /tmp:uid=1001,gid=1001,mode=1777
+      - /var/tmp:uid=1001,gid=1001,mode=1777
+      - /.cache/pypoetry:uid=1001,gid=1001
     security_opt:
       - no-new-privileges:true
     cap_drop:
