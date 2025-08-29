@@ -1,3 +1,9 @@
+## v0.7.18 (2025-08-29)
+
+### refactor
+
+- reorganize nginx configuration for improved structure and readability
+
 ## v0.7.17 (2025-08-29)
 
 ### fix
