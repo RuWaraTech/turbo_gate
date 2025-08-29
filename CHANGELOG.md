@@ -1,3 +1,9 @@
+## v0.7.14 (2025-08-29)
+
+### fix
+
+- add /run tmpfs mount for nginx service to improve security
+
 ## v0.7.13 (2025-08-29)
 
 ### fix
