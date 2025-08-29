@@ -223,36 +223,36 @@
       when: "'swarm_managers' in group_names"
       run_once: true
 
-    - name: Display network encryption status
-      debug:
-        msg: "Network {{ item.item }}: Encrypted={{ item.network.Options.encrypted | default('false') }}"
-      loop: "{{ network_info.results }}"
-      when: item.network is defined
-      run_once: true
+    # - name: Display network encryption status
+    #   debug:
+    #     msg: "Network {{ item.item }}: Encrypted={{ item.network.Options.encrypted | default('false') }}"
+    #   loop: "{{ network_info.results }}"
+    #   when: item.network is defined
+    #   run_once: true
 
-    # Security health check
-    - name: Final security verification
-      block:
-        - name: Check fail2ban status
-          command: systemctl is-active fail2ban
-          register: fail2ban_status
-          failed_when: false
-          changed_when: false
+    # # Security health check
+    # - name: Final security verification
+    #   block:
+    #     - name: Check fail2ban status
+    #       command: systemctl is-active fail2ban
+    #       register: fail2ban_status
+    #       failed_when: false
+    #       changed_when: false
 
-        - name: Check SSH hardening
-          shell: grep -q "PasswordAuthentication no" /etc/ssh/sshd_config
-          register: ssh_hardening_check
-          failed_when: false
-          changed_when: false
+    #     - name: Check SSH hardening
+    #       shell: grep -q "PasswordAuthentication no" /etc/ssh/sshd_config
+    #       register: ssh_hardening_check
+    #       failed_when: false
+    #       changed_when: false
 
-        - name: Security status summary
-          debug:
-            msg:
-              - "=== Security Status Summary ==="
-              - "fail2ban: {{ 'Active' if fail2ban_status.rc == 0 else 'Inactive' }}"
-              - "SSH hardening: {{ 'Applied' if ssh_hardening_check.rc == 0 else 'Not applied' }}"
-              - "Docker Swarm: {{ 'Secure' if docker_security_check.rc == 0 else 'Review needed' }}"
-              - "Encrypted networks: {{ swarm_networks.keys() | list | join(', ') }}"
+    #     - name: Security status summary
+    #       debug:
+    #         msg:
+    #           - "=== Security Status Summary ==="
+    #           - "fail2ban: {{ 'Active' if fail2ban_status.rc == 0 else 'Inactive' }}"
+    #           - "SSH hardening: {{ 'Applied' if ssh_hardening_check.rc == 0 else 'Not applied' }}"
+    #           - "Docker Swarm: {{ 'Secure' if docker_security_check.rc == 0 else 'Review needed' }}"
+    #           - "Encrypted networks: {{ swarm_networks.keys() | list | join(', ') }}"
 
     - name: Final cluster status
       ansible.builtin.command: docker system info --format '{{ '{{' }}.Swarm.Nodes{{ '}}' }} nodes in swarm'
