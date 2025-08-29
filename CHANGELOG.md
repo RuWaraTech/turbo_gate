@@ -1,3 +1,9 @@
+## v0.7.16 (2025-08-29)
+
+### fix
+
+- create NGINX cache subdirectories and set permissions for improved caching
+
 ## v0.7.15 (2025-08-29)
 
 ### fix
