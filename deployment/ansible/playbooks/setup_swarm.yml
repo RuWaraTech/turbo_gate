@@ -212,20 +212,22 @@
       when: "'swarm_managers' in group_names"
       run_once: true
 
-    # Network security verification
-    - name: Verify encrypted overlay networks
-      command: docker network ls --filter driver=overlay --format '{{ "{{" }}.Name{{ "}}" }} {{ "{{" }}.Options{{ "}}" }}'
-      register: overlay_networks
-      changed_when: false
+    - name: Get detailed network information
+      community.docker.docker_network_info:
+        name: "turbogate_{{ item }}"
+      loop:
+        - frontend
+        - backend
+        - database
+      register: network_info
       when: "'swarm_managers' in group_names"
       run_once: true
 
-    - name: Display network security status
+    - name: Display network encryption status
       debug:
-        msg: "Overlay networks: {{ overlay_networks.stdout_lines }}"
-      when: 
-        - "'swarm_managers' in group_names"
-        - overlay_networks is defined
+        msg: "Network {{ item.item }}: Encrypted={{ item.network.Options.encrypted | default('false') }}"
+      loop: "{{ network_info.results }}"
+      when: item.network is defined
       run_once: true
 
     # Security health check
