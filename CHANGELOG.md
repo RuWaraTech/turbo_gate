@@ -1,3 +1,9 @@
+## v0.7.3 (2025-08-29)
+
+### refactor
+
+- replace network security verification with detailed network information retrieval
+
 ## v0.7.2 (2025-08-28)
 
 ### refactor
