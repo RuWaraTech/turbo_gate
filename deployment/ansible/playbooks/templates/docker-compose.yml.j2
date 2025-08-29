@@ -168,7 +168,7 @@ services:
     networks:
       - turbogate_frontend
     healthcheck:
-      test: ["CMD-SHELL", "curl -k -f http://localhost/health || exit 1"]
+      test: ["CMD-SHELL", "curl -k -f http://localhost/lb-health || exit 1"]
       interval: 15s
       timeout: 3s
       retries: 3
@@ -177,11 +177,15 @@ services:
       - turbogate
     read_only: true
     tmpfs:
-      - /tmp
-      - /var/run
-      - /run 
-      - /run/nginx:uid=101,gid=101,mode=755 
-      - /var/cache/nginx:uid=101,gid=101,mode=755
+      - /tmp:uid=101,gid=101,mode=755
+      - /var/run:uid=101,gid=101,mode=755
+      - /run:uid=101,gid=101,mode=755
+      - /run/nginx:uid=101,gid=101,mode=755
+      - /var/cache/nginx/client_temp:uid=101,gid=101,mode=755
+      - /var/cache/nginx/proxy_temp:uid=101,gid=101,mode=755
+      - /var/cache/nginx/fastcgi_temp:uid=101,gid=101,mode=755
+      - /var/cache/nginx/uwsgi_temp:uid=101,gid=101,mode=755
+      - /var/cache/nginx/scgi_temp:uid=101,gid=101,mode=755
     security_opt:
       - no-new-privileges:true
     cap_drop:
