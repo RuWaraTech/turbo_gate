@@ -207,8 +207,8 @@ resource "hcloud_server" "manager" {
     echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
     
     # SSH hardening
-    sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
     systemctl restart sshd
     
     # Install fail2ban
@@ -279,8 +279,8 @@ resource "hcloud_server" "worker" {
     echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
     
     # SSH hardening
-    sed -i 's/#PermitRootLogin yes/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+    sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
     systemctl restart sshd
     
     # Install fail2ban
