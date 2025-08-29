@@ -1,3 +1,9 @@
+## v0.7.4 (2025-08-29)
+
+### refactor
+
+- improve SSH hardening commands for consistency
+
 ## v0.7.3 (2025-08-29)
 
 ### refactor
