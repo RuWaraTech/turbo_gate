@@ -63,6 +63,31 @@ resource "hcloud_firewall" "ssh_access" {
   }
 }
 
+resource "hcloud_firewall" "manager_web" {
+  name = "turbogate-manager-web-fw"
+
+  rule {
+    direction   = "in"
+    protocol    = "tcp"
+    port        = "80"
+    source_ips  = ["0.0.0.0/0", "::/0"]
+    description = "Allow HTTP traffic"
+  }
+
+  rule {
+    direction   = "in"
+    protocol    = "tcp"
+    port        = "443"
+    source_ips  = ["0.0.0.0/0", "::/0"]
+    description = "Allow HTTPS traffic"
+  }
+
+  labels = {
+    purpose     = "manager-web-access"
+    environment = var.environment
+  }
+}
+
 resource "hcloud_firewall" "docker_swarm_enhanced" {
   name = "turbogate-swarm-enhanced-fw"
   
@@ -108,73 +133,6 @@ resource "hcloud_firewall" "docker_swarm_enhanced" {
   }
 }
 
-# Firewall - Enhanced for Docker Swarm (Original - kept for web traffic)
-resource "hcloud_firewall" "main" {
-  name = "turbogate-firewall"
-  
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "22"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-  
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "80"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-  
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "443"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-  
-  # Docker Swarm ports - Enhanced rules
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "2377"
-    source_ips = ["10.0.0.0/16"]
-    description = "Docker Swarm manager API"
-  }
-  
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "7946"
-    source_ips = ["10.0.0.0/16"]
-    description = "Container network discovery"
-  }
-  
-  rule {
-    direction  = "in"
-    protocol   = "udp"
-    port       = "7946"
-    source_ips = ["10.0.0.0/16"]
-    description = "Container network discovery"
-  }
-  
-  rule {
-    direction  = "in"
-    protocol   = "udp"
-    port       = "4789"
-    source_ips = ["10.0.0.0/16"]
-    description = "Overlay network traffic"
-  }
-  
-  # Additional rule for ICMP (ping)
-  rule {
-    direction  = "in"
-    protocol   = "icmp"
-    source_ips = ["10.0.0.0/16"]
-    description = "Internal network ping"
-  }
-}
-
 # Manager Node - Enhanced with multiple firewalls
 resource "hcloud_server" "manager" {
   name        = "turbogate-manager"
@@ -185,9 +143,9 @@ resource "hcloud_server" "manager" {
   
   # Apply multiple firewalls for layered security
   firewall_ids = [
-    hcloud_firewall.main.id,              # Your existing firewall
-    hcloud_firewall.ssh_access.id,        # New SSH-specific firewall
-    hcloud_firewall.docker_swarm_enhanced.id  # Enhanced Docker Swarm firewall
+    hcloud_firewall.manager_web.id,
+    hcloud_firewall.ssh_access.id,
+    hcloud_firewall.docker_swarm_enhanced.id
   ]
   
   network {
@@ -203,8 +161,8 @@ resource "hcloud_server" "manager" {
     
     # Basic security hardening
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
-    echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
-    echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
+    echo "10.0.2.11 turbogate-worker-1" >> /etc/hosts
+    echo "10.0.2.12 turbogate-worker-2" >> /etc/hosts
     
     # SSH hardening
     sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
@@ -258,14 +216,10 @@ resource "hcloud_server" "worker" {
     hcloud_firewall.docker_swarm_enhanced.id  # Docker Swarm only
     # Note: Intentionally NOT including main firewall (no HTTP/HTTPS on workers)
   ]
-
-  depends_on = [
-  hcloud_firewall.main
- ]
   
   network {
     network_id = hcloud_network.main.id
-    ip         = "10.0.1.${11 + count.index}"
+    ip         = "10.0.2.${11 + count.index}"
   }
   
   # Similar security hardening for workers
@@ -275,8 +229,8 @@ resource "hcloud_server" "worker" {
     apt-get install -y python3 python3-pip net-tools curl
     
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
-    echo "10.0.1.11 turbogate-worker-1" >> /etc/hosts
-    echo "10.0.1.12 turbogate-worker-2" >> /etc/hosts
+    echo "10.0.2.11 turbogate-worker-1" >> /etc/hosts
+    echo "10.0.2.12 turbogate-worker-2" >> /etc/hosts
     
     # SSH hardening
     sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
@@ -334,9 +288,9 @@ resource "local_file" "ansible_inventory" {
     manager_ip       = hcloud_server.manager.ipv4_address
     manager_internal = "10.0.1.10"
     worker_1_ip      = hcloud_server.worker[0].ipv4_address
-    worker_1_internal = "10.0.1.11"
+    worker_1_internal = "10.0.2.11"
     worker_2_ip      = hcloud_server.worker[1].ipv4_address
-    worker_2_internal = "10.0.1.12"
+    worker_2_internal = "10.0.2.12"
     floating_ip      = hcloud_floating_ip.main.ip_address
     
     # Security configuration
