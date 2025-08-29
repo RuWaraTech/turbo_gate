@@ -61,7 +61,7 @@ services:
     depends_on:
       - redis
     # Security enhancements
-    user: "1000:1000"  # Non-root user
+    user: "1001:1001"  # Non-root user
     read_only: true    # Read-only root filesystem
     tmpfs:
       - /tmp
