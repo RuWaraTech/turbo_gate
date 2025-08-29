@@ -1,3 +1,9 @@
+## v0.7.11 (2025-08-29)
+
+### fix
+
+- enhance Dockerfile so that .env is not recreated at run rime and dremoved the tmp localtions as they should not be needed
+
 ## v0.7.10 (2025-08-29)
 
 ### fix
