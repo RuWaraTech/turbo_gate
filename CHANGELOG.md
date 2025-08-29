@@ -1,3 +1,9 @@
+## v0.7.19 (2025-08-29)
+
+### fix
+
+- update nginx config target path to use nginx.conf instead of default.conf
+
 ## v0.7.18 (2025-08-29)
 
 ### refactor
