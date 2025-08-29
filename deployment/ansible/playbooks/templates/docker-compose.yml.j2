@@ -51,7 +51,7 @@ services:
         mode: 0444
     networks:
       - turbogate_frontend
-      - turbogate_backend
+      - turbogate_database
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
       interval: 15s
@@ -102,7 +102,7 @@ services:
         target: redis_password
         mode: 0444
     networks:
-      - turbogate_backend
+      - turbogate_database
     volumes:
       - redis_data:/data
     healthcheck:
