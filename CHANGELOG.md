@@ -1,3 +1,9 @@
+## v0.7.10 (2025-08-29)
+
+### fix
+
+- update non-root user ID for turbogate service in docker-compose
+
 ## v0.7.9 (2025-08-29)
 
 ### fix
