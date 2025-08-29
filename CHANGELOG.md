@@ -1,3 +1,9 @@
+## v0.7.5 (2025-08-29)
+
+### refactor
+
+- comment out unused security checks in swarm setup
+
 ## v0.7.4 (2025-08-29)
 
 ### refactor
