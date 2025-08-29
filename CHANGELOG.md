@@ -1,3 +1,9 @@
+## v0.7.6 (2025-08-29)
+
+### refactor
+
+- enhance security configurations and update service constraints in docker-compose
+
 ## v0.7.5 (2025-08-29)
 
 ### refactor
