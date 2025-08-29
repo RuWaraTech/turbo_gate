@@ -1,3 +1,9 @@
+## v0.7.12 (2025-08-29)
+
+### fix
+
+- update tmpfs configuration for turbogate service to enhance security and permissions
+
 ## v0.7.11 (2025-08-29)
 
 ### fix
