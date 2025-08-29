@@ -225,9 +225,10 @@
       failed_when: false
       ignore_errors: yes
 
-    - name: Create nginx config alias for new deployments
+    # CRITICAL FIX: Create nginx_config alias BEFORE deleting temp file
+    - name: Create nginx_config alias for compose compatibility
       ansible.builtin.command: docker config create nginx_config /tmp/nginx.conf
-      when: "'nginx_config' not in existing_configs.stdout_lines"
+      register: nginx_alias_creation
       failed_when: false
       ignore_errors: yes
 
@@ -235,7 +236,9 @@
       ansible.builtin.file:
         path: /tmp/nginx.conf
         state: absent
-    
+      when: nginx_alias_creation is finished
+
+  
     - name: Verify overlay network exists
       community.docker.docker_network:
         name: turbogate_network
