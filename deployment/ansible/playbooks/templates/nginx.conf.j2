@@ -15,28 +15,9 @@ http {
     # DNS resolver for dynamic upstream resolution
     resolver 127.0.0.11 valid=30s ipv6=off;
 
-    # ENHANCED Real IP configuration for Docker Swarm
-    # Trust Docker Swarm overlay networks
-    set_real_ip_from 10.10.0.0/16;      # Docker Swarm overlay network range
-    set_real_ip_from 172.0.0.0/8;       # All Docker 172 networks  
-    set_real_ip_from 192.168.0.0/16;    # Common internal networks
-    
-    # Trust Hetzner internal networks from your Terraform
-    set_real_ip_from 10.0.1.0/24;       # Management subnet
-    set_real_ip_from 10.0.2.0/24;       # Application subnet  
-    set_real_ip_from 10.0.3.0/24;       # Database subnet
-    
-    # Docker networks
-    set_real_ip_from 172.18.0.0/16;     # docker_gwbridge
-    set_real_ip_from 172.17.0.0/16;     # docker0
-    
-    # Common load balancer networks (CloudFlare, AWS ELB, etc.)
-    set_real_ip_from 173.245.48.0/20;   # CloudFlare
-    set_real_ip_from 103.21.244.0/22;   # CloudFlare
-    set_real_ip_from 103.22.200.0/22;   # CloudFlare
-    
-    real_ip_header X-Forwarded-For;
-    real_ip_recursive on;
+    # REMOVED Real IP configuration - NGINX is internet-facing
+    # $remote_addr already contains the real client IP
+    # No need for set_real_ip_from when NGINX receives direct connections
 
     # Rate limiting zones with detailed tracking
     limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
@@ -51,12 +32,11 @@ http {
     # Enhanced cache configuration
     proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=api_cache:10m max_size=100m inactive=60m use_temp_path=off;
 
-    # DETAILED logging format with all IP tracking info
+    # DETAILED logging format with IP tracking info
     log_format detailed_ip '$remote_addr - $remote_user [$time_local] '
                           '"$request" $status $body_bytes_sent '
                           '"$http_referer" "$http_user_agent" '
                           'xff: "$http_x_forwarded_for" '
-                          'real_ip: "$realip_remote_addr" '
                           'upstream: "$upstream_addr" '
                           'req_time: $request_time '
                           'upstream_time: $upstream_response_time '
@@ -194,12 +174,11 @@ http {
             proxy_send_timeout 3s;
             proxy_read_timeout 3s;
             
-            # Headers with real IP forwarding
+            # Headers with real IP forwarding - $remote_addr is the real client IP
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-For $remote_addr; # Single entry since we're first proxy
             proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header X-Original-Remote-Addr $realip_remote_addr;
         }
         
         # Load balancer health check
@@ -215,7 +194,6 @@ http {
             default_type text/plain;
             return 200 "=== IP Detection Test ===
 Remote Addr: $remote_addr
-Real IP Remote Addr: $realip_remote_addr  
 X-Forwarded-For: $http_x_forwarded_for
 X-Real-IP: $http_x_real_ip
 Connection: $connection
@@ -233,7 +211,6 @@ Rate Limit Status: $limit_req_status
             default_type application/json;
             return 200 '{
     "remote_addr": "$remote_addr",
-    "realip_remote_addr": "$realip_remote_addr",
     "http_x_forwarded_for": "$http_x_forwarded_for", 
     "http_x_real_ip": "$http_x_real_ip",
     "connection": "$connection",
@@ -249,20 +226,19 @@ Rate Limit Status: $limit_req_status
             set $backend "turbogate_turbogate:5000";
             proxy_pass http://$backend;
             
-            # COMPREHENSIVE header forwarding including real IP
+            # COMPREHENSIVE header forwarding - $remote_addr is the real client IP
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-For $remote_addr; # Single entry since we're first proxy
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-Host $server_name;
-            proxy_set_header X-Original-Remote-Addr $realip_remote_addr;
             proxy_set_header X-Request-ID $request_id;
             
             # WebSocket support
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection $connection_upgrade;
             
-            # Rate limiting with burst capability
+            # Rate limiting with burst capability - uses real client IP
             limit_req zone=api_limit burst=20 nodelay;
             limit_req_error_log_level warn;
             
@@ -279,16 +255,15 @@ Rate Limit Status: $limit_req_status
             set $backend "turbogate_turbogate:5000";
             proxy_pass http://$backend;
             
-            # Headers including real IP for backend processing
+            # Headers for backend processing - $remote_addr is the real client IP
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-For $remote_addr; # Single entry since we're first proxy
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_set_header X-Forwarded-Host $server_name;
-            proxy_set_header X-Original-Remote-Addr $realip_remote_addr;
             proxy_set_header X-Request-ID $request_id;
             
-            # Enhanced API rate limiting
+            # Enhanced API rate limiting - uses real client IP
             limit_req zone=api_limit burst=30 nodelay;
             limit_req zone=burst_limit burst=5 nodelay;
             limit_req_error_log_level warn;
@@ -341,9 +316,8 @@ Rate Limit Status: $limit_req_status
             proxy_pass http://$backend;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header X-Original-Remote-Addr $realip_remote_addr;
         }
         
         # Static files with aggressive caching and compression
