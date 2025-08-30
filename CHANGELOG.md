@@ -1,3 +1,9 @@
+## v0.7.28 (2025-08-30)
+
+### fix
+
+- update real IP header to use X-Forwarded-For and enhance log format for accurate IP logging
+
 ## v0.7.27 (2025-08-30)
 
 ### fix
