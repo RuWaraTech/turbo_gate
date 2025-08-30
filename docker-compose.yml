@@ -4,22 +4,28 @@ services:
     image: redis:7-alpine
     container_name: turbogate-redis
     restart: unless-stopped
+    # Best Practice: Use .env file for secrets, not hardcoded values.
+    # Create a .env file with: REDIS_PASSWORD=your_strong_password
     environment:
-      REDIS_PASSWORD: dev_redis_password_123
+      - REDIS_PASSWORD=${REDIS_PASSWORD?Variable not set}
     command: >
       redis-server
-      --requirepass dev_redis_password_123
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
-    ports:
-      - "6379:6379"
+    # Exposing Redis to the host is a security risk. Communicate over the Docker network instead.
+    # ports:
+    #   - "6379:6379"
     networks:
       - turbogate-network
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--raw", "incr", "ping"]
       interval: 30s
       timeout: 10s
       retries: 5
+    security_opt:
+      - no-privileges
+    cap_drop:
+      - ALL
 
   # TurboGate API Gateway
   turbogate:
@@ -29,12 +35,17 @@ services:
       target: prod
     container_name: turbogate-gateway
     restart: unless-stopped
+    # Best Practice: Use .env file for secrets, not hardcoded values.
+    # Create a .env file with: SECRET_KEY=your_strong_secret and other variables.
     environment:
       - FLASK_ENV=prod
-      - SECRET_KEY=dev_gateway_secret_key_12345
-      - REDIS_URL=redis://:dev_redis_password_123@redis:6379/0
-      - LOG_LEVEL=DEBUG
-      - CORS_ORIGINS=http://localhost:3000
+      - SECRET_KEY=${SECRET_KEY?Variable not set}
+      - REDIS_URL=redis://:${REDIS_PASSWORD?Variable not set}@redis:6379/0
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=${CORS_ORIGINS?Variable not set}
+    # WARNING: Mounting the host directory is a security risk in production.
+    # This is enabled for local development to allow for live code reloading.
+    # For production, build a self-contained image without this volume mount.
     volumes:
       - .:/app
     ports:
@@ -49,6 +60,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+    user: "1001"
+    security_opt:
+      - no-privileges
+    cap_drop:
+      - ALL
 
 networks:
   turbogate-network:

@@ -11,6 +11,9 @@ http {
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
 
+    # Prevent Nginx version advertisement
+    server_tokens off;
+
     # Dynamic upstream resolution - no static upstream blocks
     resolver 127.0.0.11 valid=30s ipv6=off;
 
@@ -19,6 +22,9 @@ http {
     limit_req_zone $binary_remote_addr zone=burst_limit:10m rate=50r/m;
     limit_req_zone $binary_remote_addr zone=health_limit:10m rate=100r/m;
     limit_req_status 429;
+
+    # Connection limiting to prevent DoS
+    limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
 
     # Improved cache configuration
     proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=api_cache:10m max_size=100m inactive=60m use_temp_path=off;
@@ -75,7 +81,7 @@ http {
         # Enhanced SSL security settings
         ssl_protocols TLSv1.2 TLSv1.3;
         ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
-        ssl_prefer_server_ciphers off;
+        ssl_prefer_server_ciphers on;
         ssl_session_cache shared:SSL:50m;
         ssl_session_timeout 24h;
         ssl_session_tickets off;
@@ -93,7 +99,9 @@ http {
         add_header X-XSS-Protection "1; mode=block" always;
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-        add_header Content-Security-Policy "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';" always;
+        # NOTE: Stricter CSP applied. 'unsafe-inline' and 'unsafe-eval' removed.
+        # This may require application changes (e.g., removing inline scripts/styles) to function correctly.
+        add_header Content-Security-Policy "default-src 'self' https:; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'self';" always;
         add_header X-Deployment-Version "{{ version | default('unknown') }}" always;
 
         # Improved logging with detailed format
@@ -166,6 +174,7 @@ http {
             
             # Rate limiting with burst capability
             limit_req zone=api_limit burst=20 nodelay;
+            limit_conn conn_limit 10;
             
             # Custom error handling
             error_page 502 503 504 = @fallback;
