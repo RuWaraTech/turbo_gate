@@ -1,3 +1,9 @@
+## v0.7.25 (2025-08-30)
+
+### fix
+
+- update real IP header to use X-Real-IP for accurate logging
+
 ## v0.7.24 (2025-08-30)
 
 ### fix
