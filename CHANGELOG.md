@@ -1,3 +1,9 @@
+## v0.7.23 (2025-08-30)
+
+### fix
+
+- updating gunicorn & flask-cors to patch security valnurabilities
+
 ## v0.7.22 (2025-08-29)
 
 ## v0.7.21 (2025-08-29)
