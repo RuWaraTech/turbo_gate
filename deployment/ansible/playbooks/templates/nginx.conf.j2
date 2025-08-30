@@ -1,4 +1,4 @@
-# Enhanced NGINX configuration with detailed IP logging and rate limiting
+# Enhanced NGINX configuration with host mode networking
 user nginx;
 worker_processes auto;
 error_log /var/log/nginx/error.log warn;
@@ -15,64 +15,31 @@ http {
     # DNS resolver for dynamic upstream resolution
     resolver 127.0.0.11 valid=30s ipv6=off;
 
-    # REMOVED Real IP configuration - NGINX is internet-facing
+    # NO Real IP configuration needed - host mode gives direct client connections
     # $remote_addr already contains the real client IP
-    # No need for set_real_ip_from when NGINX receives direct connections
 
-    # Rate limiting zones with detailed tracking
+    # Rate limiting zones - uses real client IPs directly
     limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=burst_limit:10m rate=50r/m;
     limit_req_zone $binary_remote_addr zone=health_limit:10m rate=100r/m;
-    
-    # Geographic rate limiting (if needed)
-    limit_req_zone $binary_remote_addr$http_user_agent zone=ua_limit:10m rate=5r/s;
-    
     limit_req_status 429;
 
     # Enhanced cache configuration
     proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=api_cache:10m max_size=100m inactive=60m use_temp_path=off;
 
-    # DETAILED logging format with IP tracking info
-    log_format detailed_ip '$remote_addr - $remote_user [$time_local] '
-                          '"$request" $status $body_bytes_sent '
-                          '"$http_referer" "$http_user_agent" '
-                          'xff: "$http_x_forwarded_for" '
-                          'upstream: "$upstream_addr" '
-                          'req_time: $request_time '
-                          'upstream_time: $upstream_response_time '
-                          'rate_limit: $limit_req_status '
-                          'conn: $connection_requests';
-
-    # Separate log format for rate limiting analysis
-    log_format rate_limit_analysis '$time_iso8601 $remote_addr '
-                                  'status:$status '
-                                  'method:"$request_method" '
-                                  'uri:"$request_uri" '
-                                  'rate_limited:$limit_req_status '
-                                  'xff:"$http_x_forwarded_for" '
-                                  'ua:"$http_user_agent"';
-        
-    # WebSocket upgrade handling
-    map $http_upgrade $connection_upgrade {
-        default upgrade;
-        '' close;
-    }
-
-    # Rate limiting bypass for health checks from specific sources
-    geo $health_check_bypass {
-        default 0;
-        127.0.0.1 1;          # Local health checks
-        10.0.1.0/24 1;        # Management subnet
-        # Add your monitoring IPs here
-    }
+    # Simplified logging format (no real_ip needed)
+    log_format detailed '$remote_addr - $remote_user [$time_local] '
+                       '"$request" $status $body_bytes_sent '
+                       '"$http_referer" "$http_user_agent" '
+                       'upstream: "$upstream_addr" '
+                       'req_time: $request_time '
+                       'upstream_time: $upstream_response_time '
+                       'rate_limit: $limit_req_status';
 
     server {
         listen 80;
         listen [::]:80;
         server_name {{ domain_name }} www.{{ domain_name }};
-
-        # Enhanced logging for HTTP (redirects)
-        access_log /var/log/nginx/http_redirect.log detailed_ip;
 
         # Allow Let's Encrypt challenges
         location /.well-known/acme-challenge/ {
@@ -81,14 +48,14 @@ http {
             try_files $uri =404;
         }
         
-        # Health check endpoint for load balancers (HTTP)
+        # Health check endpoint
         location = /lb-health {
             access_log off;
             return 200 "NGINX OK\n";
             add_header Content-Type text/plain;
         }
         
-        # Redirect all other HTTP traffic to HTTPS
+        # Redirect HTTP to HTTPS
         location / {
             return 301 https://$server_name$request_uri;
         }
@@ -104,251 +71,68 @@ http {
         ssl_certificate /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem;
         ssl_certificate_key /etc/letsencrypt/live/{{ domain_name }}/privkey.pem;
         
-        # Enhanced SSL security settings
+        # SSL security settings
         ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
         ssl_prefer_server_ciphers off;
-        ssl_session_cache shared:SSL:50m;
-        ssl_session_timeout 24h;
-        ssl_session_tickets off;
-        ssl_stapling on;
-        ssl_stapling_verify on;
-        ssl_trusted_certificate /etc/letsencrypt/live/{{ domain_name }}/chain.pem;
         
-        # DNS resolver for OCSP stapling
-        resolver 127.0.0.11 valid=300s;
-        resolver_timeout 5s;
-        
-        # Enhanced security headers
+        # Security headers
         add_header X-Frame-Options "SAMEORIGIN" always;
         add_header X-Content-Type-Options "nosniff" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-        add_header Content-Security-Policy "default-src 'self' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';" always;
-        add_header X-Deployment-Version "{{ version | default('unknown') }}" always;
 
-        # MAIN ACCESS LOG with detailed IP tracking
-        access_log /var/log/nginx/turbogate_access.log detailed_ip buffer=32k flush=5s;
+        # Main access log
+        access_log /var/log/nginx/access.log detailed;
+        error_log /var/log/nginx/error.log warn;
         
-        # SEPARATE log for rate limiting analysis
-        access_log /var/log/nginx/rate_limit.log rate_limit_analysis buffer=16k flush=2s;
-        
-        error_log /var/log/nginx/turbogate_error.log warn;
-        
-        # Enhanced client settings
+        # Client settings
         client_max_body_size 10M;
-        client_body_buffer_size 128k;
-        client_body_timeout 12;
-        client_header_timeout 12;
         
-        # Optimized proxy settings
-        proxy_connect_timeout 5s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-        proxy_buffering on;
-        proxy_buffer_size 8k;
-        proxy_buffers 16 8k;
-        proxy_busy_buffers_size 16k;
-        proxy_temp_file_write_size 64k;
-        
-        # Connection reuse
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        
-        # Health check endpoint (high priority, conditional rate limiting)
+        # Health check endpoint
         location = /health {
-            # Bypass rate limiting for health checks from trusted sources
-            set $rate_limit_zone "";
-            if ($health_check_bypass = 0) {
-                set $rate_limit_zone "health_limit";
-            }
-            
-            limit_req zone=$rate_limit_zone burst=10 nodelay;
-            
             set $backend "turbogate_turbogate:5000";
             proxy_pass http://$backend/gateway/health;
             
-            # Fast health check settings
-            proxy_connect_timeout 2s;
-            proxy_send_timeout 3s;
-            proxy_read_timeout 3s;
-            
-            # Headers with real IP forwarding - $remote_addr is the real client IP
+            # Headers with real client IP
             proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $remote_addr; # Single entry since we're first proxy
+            proxy_set_header X-Real-IP $remote_addr;  # Real client IP
+            proxy_set_header X-Forwarded-For $remote_addr;  # Real client IP
             proxy_set_header X-Forwarded-Proto $scheme;
         }
-        
-        # Load balancer health check
-        location = /lb-health {
-            access_log off;
-            return 200 "NGINX OK\n";
-            add_header Content-Type text/plain;
-        }
 
-        # ENHANCED IP testing endpoint with more details
+        # IP test endpoint - will show real client IP
         location /test_ip {
-            access_log /var/log/nginx/ip_test.log detailed_ip;
             default_type text/plain;
-            return 200 "=== IP Detection Test ===
-Remote Addr: $remote_addr
-X-Forwarded-For: $http_x_forwarded_for
-X-Real-IP: $http_x_real_ip
-Connection: $connection
-Request ID: $request_id
-Server Name: $server_name
-Time: $time_iso8601
-Rate Limit Status: $limit_req_status
-=== End Test ===
-";
-        }
-
-        # Debug headers endpoint
-        location /debug_headers {
-            access_log /var/log/nginx/debug.log detailed_ip;
-            default_type application/json;
-            return 200 '{
-    "remote_addr": "$remote_addr",
-    "http_x_forwarded_for": "$http_x_forwarded_for", 
-    "http_x_real_ip": "$http_x_real_ip",
-    "connection": "$connection",
-    "request_time": "$request_time",
-    "limit_req_status": "$limit_req_status",
-    "server_name": "$server_name",
-    "time": "$time_iso8601"
-}';
+            return 200 "Remote Addr: $remote_addr\nX-Forwarded-For: $http_x_forwarded_for\n";
         }
         
-        # Root location - main application with enhanced IP forwarding
+        # Main application
         location / {
             set $backend "turbogate_turbogate:5000";
             proxy_pass http://$backend;
             
-            # COMPREHENSIVE header forwarding - $remote_addr is the real client IP
+            # Forward real client IP to backend
             proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $remote_addr; # Single entry since we're first proxy
+            proxy_set_header X-Real-IP $remote_addr;  # Real client IP
+            proxy_set_header X-Forwarded-For $remote_addr;  # Real client IP
             proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header X-Forwarded-Host $server_name;
-            proxy_set_header X-Request-ID $request_id;
             
-            # WebSocket support
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection $connection_upgrade;
-            
-            # Rate limiting with burst capability - uses real client IP
+            # Rate limiting
             limit_req zone=api_limit burst=20 nodelay;
-            limit_req_error_log_level warn;
-            
-            # Custom error handling
-            error_page 502 503 504 = @fallback;
-            
-            # Disable buffering for real-time features
-            proxy_buffering off;
-            proxy_cache_bypass $http_upgrade;
         }
         
-        # Gateway API endpoints with enhanced IP forwarding
+        # Gateway API
         location /gateway/ {
             set $backend "turbogate_turbogate:5000";
             proxy_pass http://$backend;
             
-            # Headers for backend processing - $remote_addr is the real client IP
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $remote_addr; # Single entry since we're first proxy
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_set_header X-Forwarded-Host $server_name;
-            proxy_set_header X-Request-ID $request_id;
-            
-            # Enhanced API rate limiting - uses real client IP
-            limit_req zone=api_limit burst=30 nodelay;
-            limit_req zone=burst_limit burst=5 nodelay;
-            limit_req_error_log_level warn;
-            
-            # Smart caching for API endpoints
-            proxy_cache api_cache;
-            proxy_cache_methods GET HEAD;
-            proxy_cache_key "$scheme$request_method$host$request_uri$is_args$args";
-            proxy_cache_valid 200 302 5m;
-            proxy_cache_valid 404 1m;
-            proxy_cache_bypass $http_authorization $cookie_session $arg_no_cache;
-            proxy_no_cache $http_authorization $cookie_session;
-            
-            # Cache and rate limit status headers
-            add_header X-Cache-Status $upstream_cache_status;
-            add_header X-Rate-Limit-Status $limit_req_status;
-            add_header X-Real-IP-Detected $remote_addr;
-            
-            # Error fallback
-            error_page 502 503 504 = @fallback;
-        }
-        
-        # Fallback handler for service unavailability
-        location @fallback {
-            internal;
-            add_header Content-Type text/html;
-            return 503 '<!DOCTYPE html>
-    <html>
-    <head>
-        <title>Service Temporarily Unavailable</title>
-        <meta http-equiv="refresh" content="10">
-    </head>
-    <body>
-        <h1>Service Temporarily Unavailable</h1>
-        <p>The service is being updated. Please wait a moment and try again.</p>
-        <p>This page will automatically refresh in 10 seconds.</p>
-    </body>
-    </html>';
-        }
-        
-        # Metrics endpoint (secured for internal access)
-        location /metrics {
-            # Allow internal networks
-            allow 10.0.0.0/8;
-            allow 172.16.0.0/12;
-            allow 192.168.0.0/16;
-            deny all;
-            
-            set $backend "turbogate_turbogate:5000";
-            proxy_pass http://$backend;
+            # Forward real client IP
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
-        }
-        
-        # Static files with aggressive caching and compression
-        location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
-            set $backend "turbogate_turbogate:5000";
-            proxy_pass http://$backend;
             
-            # Long-term caching for static assets
-            expires 30d;
-            add_header Cache-Control "public, immutable";
-            add_header Vary "Accept-Encoding";
-            
-            # Compression settings
-            gzip_static on;
-            gzip_vary on;
-        }
-        
-        # Security: Deny access to hidden files
-        location ~ /\. {
-            deny all;
-            access_log off;
-            log_not_found off;
-            return 404;
-        }
-        
-        # Security: Deny access to backup files
-        location ~ ~$ {
-            deny all;
-            access_log off;
-            log_not_found off;
-            return 404;
+            # Rate limiting
+            limit_req zone=api_limit burst=30 nodelay;
         }
     }
 }
