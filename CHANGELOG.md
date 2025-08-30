@@ -1,3 +1,9 @@
+## v0.7.27 (2025-08-30)
+
+### fix
+
+- correct real IP configuration for Docker setup and update log format for accurate IP logging
+
 ## v0.7.26 (2025-08-30)
 
 ### fix
