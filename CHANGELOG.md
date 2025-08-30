@@ -1,3 +1,9 @@
+## v0.7.26 (2025-08-30)
+
+### fix
+
+- update real IP configuration to trust specific subnets for accurate logging
+
 ## v0.7.25 (2025-08-30)
 
 ### fix
