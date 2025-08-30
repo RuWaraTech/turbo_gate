@@ -1,3 +1,9 @@
+## v0.7.32 (2025-08-30)
+
+### fix
+
+- enhance NGINX configuration for detailed IP logging and rate limiting
+
 ## v0.7.31 (2025-08-30)
 
 ### fix
