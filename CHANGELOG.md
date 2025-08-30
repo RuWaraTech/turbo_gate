@@ -1,3 +1,9 @@
+## v0.7.31 (2025-08-30)
+
+### fix
+
+- update Docker Swarm real IP configuration to use correct subnet mask
+
 ## v0.7.30 (2025-08-30)
 
 ### fix
