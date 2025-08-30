@@ -1,3 +1,9 @@
+## v0.7.24 (2025-08-30)
+
+### fix
+
+- enhance real IP handling and improve log format for better debugging
+
 ## v0.7.23 (2025-08-30)
 
 ### fix
