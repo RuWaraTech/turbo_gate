@@ -14,6 +14,13 @@ http {
     # Dynamic upstream resolution - no static upstream blocks
     resolver 127.0.0.11 valid=30s ipv6=off;
 
+    # Real IP configuration for Docker Swarm ingress
+    set_real_ip_from 10.10.0.0/24;      # Docker Swarm ingress network
+    set_real_ip_from 172.18.0.0/16;     # docker_gwbridge network  
+    set_real_ip_from 172.17.0.0/16;     # default docker0 bridge
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
+
     # Enhanced rate limiting with burst handling
     limit_req_zone $binary_remote_addr zone=api_limit:10m rate=10r/s;
     limit_req_zone $binary_remote_addr zone=burst_limit:10m rate=50r/m;
@@ -23,13 +30,13 @@ http {
     # Improved cache configuration
     proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=api_cache:10m max_size=100m inactive=60m use_temp_path=off;
 
-    # Log format for better debugging
-    log_format detailed '$remote_addr - $remote_user [$time_local] '
-                       '"$request" $status $body_bytes_sent '
-                       '"$http_referer" "$http_user_agent" '
-                       'upstream: $upstream_addr '
-                       'resp_time: $request_time '
-                       'upstream_time: $upstream_response_time';
+    # Log format for better debugging with real IPs
+    log_format detailed '$remote_addr ($http_x_forwarded_for) - $remote_user [$time_local] '
+                    '"$request" $status $body_bytes_sent '
+                    '"$http_referer" "$http_user_agent" '
+                    'upstream: $upstream_addr '
+                    'resp_time: $request_time '
+                    'upstream_time: $upstream_response_time';
 
     # WebSocket upgrade handling
     map $http_upgrade $connection_upgrade {
