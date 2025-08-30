@@ -1,3 +1,9 @@
+## v0.7.34 (2025-08-30)
+
+### fix
+
+- remove real_ip module and simplify configuration
+
 ## v0.7.33 (2025-08-30)
 
 ### fix
