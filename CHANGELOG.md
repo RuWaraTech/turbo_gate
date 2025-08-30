@@ -1,3 +1,9 @@
+## v0.7.33 (2025-08-30)
+
+### fix
+
+- removing real_ip as NGINX is exposed to the internet, I do not have a load balancer setup yet.
+
 ## v0.7.32 (2025-08-30)
 
 ### fix
