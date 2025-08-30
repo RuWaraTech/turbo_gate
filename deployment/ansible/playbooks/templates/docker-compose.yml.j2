@@ -1,5 +1,3 @@
-# REPLACE: deployment/ansible/templates/docker-compose.yml.j2
-
 version: '3.8'
 
 services:
@@ -123,19 +121,18 @@ services:
   nginx:
     image: nginx:alpine
     deploy:
-      replicas: 2
-      update_config:
-        parallelism: 1
-        delay: 15s
-        order: start-first
-        monitor: 30s
+      replicas: 1  # IMPORTANT: Host mode only allows 1 replica per node
       placement:
         constraints: 
           - node.labels.role == manager
           - node.labels.security_zone == dmz
           - node.labels.security_hardened == true
-        preferences:
-          - spread: node.id
+        # Remove preferences for host mode - it needs specific node placement
+      update_config:
+        parallelism: 1
+        delay: 15s
+        order: start-first
+        monitor: 30s
       restart_policy:
         condition: any
         delay: 5s
@@ -151,11 +148,11 @@ services:
       - target: 80
         published: 80
         protocol: tcp
-        mode: ingress
+        mode: host  # ← CHANGED: This preserves real client IPs
       - target: 443
         published: 443
         protocol: tcp
-        mode: ingress
+        mode: host  # ← CHANGED: This preserves real client IPs
     configs:
       - source: nginx_config
         target: /etc/nginx/nginx.conf
