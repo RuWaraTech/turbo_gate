@@ -1,3 +1,9 @@
+## v0.7.29 (2025-08-30)
+
+### fix
+
+- update real IP configuration for Docker Swarm and add debug headers location
+
 ## v0.7.28 (2025-08-30)
 
 ### fix
