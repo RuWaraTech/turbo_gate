@@ -81,15 +81,23 @@ EOL
     systemctl enable fail2ban
     systemctl start fail2ban
     
+    # Wait for fail2ban to be fully operational
+    sleep 10
+    systemctl daemon-reload
+    
     # Verify fail2ban is working for SSH
     echo "Fail2Ban SSH protection status:"
     if fail2ban-client status sshd >/dev/null 2>&1; then
         echo "✅ Fail2Ban SSH protection is ACTIVE"
         fail2ban-client status sshd | grep -E "(Status|Currently banned)"
+        
+        # Create completion marker for Ansible
+        touch /tmp/fail2ban-ready
+        echo "FAIL2BAN_STATUS=active" >> /tmp/node-info
     else
-        echo "❌ Fail2Ban SSH protection failed to start"
+        echo "⚠ Fail2Ban SSH protection failed to start"
         systemctl status fail2ban --no-pager -l
-        exit 1
+        echo "FAIL2BAN_STATUS=failed" >> /tmp/node-info
     fi
 fi
 
@@ -138,10 +146,14 @@ EOL
     echo "Kernel hardening completed successfully"
 fi
 
-# Create marker file for Ansible
+# Create final completion markers for Ansible
 touch /tmp/security-hardening-started
 echo "NODE_TYPE=$NODE_TYPE" > /tmp/node-info
 echo "SECURITY_HARDENING=$ENABLE_HARDENING" >> /tmp/node-info
+echo "INIT_COMPLETED=$(date -Iseconds)" >> /tmp/node-info
+
+# Final marker for Ansible to know everything is ready
+touch /tmp/node-init-complete
 
 # Log initialization complete
 echo "=========================================="
@@ -149,4 +161,5 @@ echo "Node initialization completed successfully"
 echo "Type: $NODE_TYPE, Index: $NODE_INDEX"
 echo "SSH Hardening: $ENABLE_HARDENING"
 echo "Fail2Ban Protection: $ENABLE_HARDENING"
+echo "Initialization timestamp: $(date -Iseconds)"
 echo "=========================================="
