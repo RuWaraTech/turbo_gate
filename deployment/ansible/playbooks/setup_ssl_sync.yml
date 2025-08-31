@@ -1,6 +1,6 @@
 ---
 - name: Setup SSL Certificates for Global NGINX WAF Deployment
-  hosts: all
+  hosts: swarm_managers:swarm_workers
   become: yes
   
   vars:
