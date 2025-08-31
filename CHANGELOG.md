@@ -1,3 +1,9 @@
+## v0.9.21 (2025-08-31)
+
+### fix
+
+- The hcloud_load_balancer_service_certificate resource block has been deleted.
+
 ## v0.9.20 (2025-08-31)
 
 ### fix
