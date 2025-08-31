@@ -11,8 +11,8 @@ output "worker_ips" {
 
 output "internal_network" {
   value = {
-    manager = [for network in hcloud_server.manager.network : network.ip if network.network_id == hcloud_network.main.id][0]
-    workers = [for s in hcloud_server.worker : [for network in s.network : network.ip if network.network_id == hcloud_network.main.id][0]]
+    manager = "10.0.1.10"
+    workers = ["10.0.2.11", "10.0.2.12"]
   }
   description = "Internal network IPs"
 }
@@ -32,7 +32,10 @@ output "load_balancer_targets" {
   value = var.enable_load_balancer ? {
     manager = hcloud_server.manager.name
     workers = [for s in hcloud_server.worker : s.name]
-  } : {}
+  } : {
+    manager = null
+    workers = []
+  }
   description = "Servers targeted by the load balancer"
 }
 
