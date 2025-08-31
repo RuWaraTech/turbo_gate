@@ -11,8 +11,8 @@ output "worker_ips" {
 
 output "internal_network" {
   value = {
-    manager = "10.0.1.10"
-    workers = ["10.0.2.11", "10.0.2.12"]
+    manager = one([for network in hcloud_server.manager.network : network.ip if network.network_id == hcloud_network.main.id])
+    workers = [for s in hcloud_server.worker : one([for network in s.network : network.ip if network.network_id == hcloud_network.main.id])]
   }
   description = "Internal network IPs"
 }

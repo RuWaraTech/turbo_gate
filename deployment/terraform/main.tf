@@ -163,8 +163,9 @@ resource "hcloud_server" "manager" {
     
     # Basic security hardening
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
-    echo "10.0.2.11 turbogate-worker-1" >> /etc/hosts
-    echo "10.0.2.12 turbogate-worker-2" >> /etc/hosts
+    %{for i in range(var.worker_count)}
+    echo "10.0.2.${11 + i} turbogate-worker-${i + 1}" >> /etc/hosts
+    %{endfor}
     
     # SSH hardening
     sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
@@ -205,7 +206,7 @@ EOL
 
 # Worker Nodes - Enhanced with security
 resource "hcloud_server" "worker" {
-  count       = 2
+  count       = var.worker_count
   name        = "turbogate-worker-${count.index + 1}"
   image       = "ubuntu-22.04"
   server_type = var.server_type
@@ -234,8 +235,9 @@ resource "hcloud_server" "worker" {
     apt-get install -y python3 python3-pip net-tools curl
     
     echo "10.0.1.10 turbogate-manager" >> /etc/hosts
-    echo "10.0.2.11 turbogate-worker-1" >> /etc/hosts
-    echo "10.0.2.12 turbogate-worker-2" >> /etc/hosts
+    %{for i in range(var.worker_count)}
+    echo "10.0.2.${11 + i} turbogate-worker-${i + 1}" >> /etc/hosts
+    %{endfor}
     
     # SSH hardening
     sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
@@ -277,11 +279,10 @@ EOL
 resource "local_file" "ansible_inventory" {
   content = templatefile("${path.module}/../ansible/inventory/inventory.tpl", {
     manager_ip       = hcloud_server.manager.ipv4_address
-    manager_internal = "10.0.1.10"
-    worker_1_ip      = hcloud_server.worker[0].ipv4_address
-    worker_1_internal = "10.0.2.11"
-    worker_2_ip      = hcloud_server.worker[1].ipv4_address
-    worker_2_internal = "10.0.2.12"
+    manager_internal = one([for network in hcloud_server.manager.network : network.ip if network.network_id == hcloud_network.main.id])
+    worker_ips       = [for s in hcloud_server.worker : s.ipv4_address]
+    worker_internals = [for s in hcloud_server.worker : one([for network in s.network : network.ip if network.network_id == hcloud_network.main.id])]
+    worker_count     = var.worker_count
     
     enable_load_balancer = var.enable_load_balancer
 

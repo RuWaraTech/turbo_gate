@@ -39,6 +39,17 @@ variable "environment" {
   }
 }
 
+variable "worker_count" {
+  description = "Number of worker nodes to create"
+  type        = number
+  default     = 5
+  
+  validation {
+    condition     = var.worker_count >= 1 && var.worker_count <= 10
+    error_message = "Worker count must be between 1 and 10."
+  }
+}
+
 variable "allowed_ssh_ips" {
   description = "List of IP addresses/CIDR blocks allowed to SSH (IMPORTANT: Restrict this!)"
   type        = list(string)
