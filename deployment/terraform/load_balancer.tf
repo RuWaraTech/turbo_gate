@@ -3,7 +3,7 @@ resource "hcloud_managed_certificate" "main" {
   count        = var.enable_load_balancer && var.ssl_certificate_type == "managed" ? 1 : 0
   name         = "turbogate-cert-${var.environment}"
   domain_names = [var.domain_name, "www.${var.domain_name}"]
-  
+
   labels = {
     app         = "turbogate"
     environment = var.environment
@@ -15,21 +15,21 @@ resource "hcloud_managed_certificate" "main" {
 resource "hcloud_firewall" "load_balancer" {
   count = var.enable_load_balancer ? 1 : 0
   name  = "turbogate-lb-fw-${var.environment}"
-  
+
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = "80"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
-  
+
   rule {
     direction  = "in"
     protocol   = "tcp"
     port       = "443"
     source_ips = ["0.0.0.0/0", "::/0"]
   }
-  
+
   labels = {
     purpose     = "load-balancer"
     environment = var.environment
@@ -43,18 +43,18 @@ resource "hcloud_load_balancer" "main" {
   name               = "turbogate-lb-${var.environment}"
   load_balancer_type = var.load_balancer_type
   location           = var.location
-  
+
   algorithm {
     type = var.load_balancer_algorithm
   }
-  
+
   labels = {
     app             = "turbogate"
     environment     = var.environment
     managed_by      = "terraform"
     ssl_termination = "enabled"
   }
-  
+
   delete_protection = var.environment == "prod" ? true : false
 }
 
@@ -64,7 +64,7 @@ resource "hcloud_load_balancer_network" "main" {
   load_balancer_id = hcloud_load_balancer.main[0].id
   network_id       = hcloud_network.main.id
   ip               = "10.0.4.10"
-  
+
   depends_on = [
     hcloud_network_subnet.monitoring
   ]
@@ -77,7 +77,7 @@ resource "hcloud_load_balancer_target" "all_nodes" {
   load_balancer_id = hcloud_load_balancer.main[0].id
   server_id        = count.index == 0 ? hcloud_server.manager.id : hcloud_server.worker[count.index - 1].id
   use_private_ip   = true
-  
+
   depends_on = [
     hcloud_load_balancer_network.main
   ]
@@ -90,14 +90,14 @@ resource "hcloud_load_balancer_service" "http_redirect" {
   protocol         = "http"
   listen_port      = 80
   destination_port = 80
-  
+
   http {
     redirect_http   = true  # Automatic HTTP to HTTPS redirect at LB
     sticky_sessions = var.enable_sticky_sessions
     cookie_name     = "HCLBSTICKY"
     cookie_lifetime = 3600
   }
-  
+
   health_check {
     protocol = "http"
     port     = 80
@@ -118,15 +118,18 @@ resource "hcloud_load_balancer_service" "https" {
   protocol         = "https"
   listen_port      = 443
   destination_port = 80  # Backend servers listen on HTTP only
-  
+
   http {
+    # CORRECTED: Certificate is attached directly here
+    certificates    = var.ssl_certificate_type == "managed" ? [hcloud_managed_certificate.main[0].id] : []
+    
     sticky_sessions = var.enable_sticky_sessions
     cookie_name     = "HCLBSTICKY"
     cookie_lifetime = 3600
   }
 
   proxyprotocol = true  # Forward client connection details to backend
-  
+
   health_check {
     protocol = "http"
     port     = 80
@@ -140,9 +143,4 @@ resource "hcloud_load_balancer_service" "https" {
   }
 }
 
-# Attach managed certificate to HTTPS service
-resource "hcloud_load_balancer_service_certificate" "main" {
-  count                   = var.enable_load_balancer && var.ssl_certificate_type == "managed" ? 1 : 0
-  load_balancer_service_id = hcloud_load_balancer_service.https[0].id
-  certificate_id          = hcloud_managed_certificate.main[0].id
-}
+# REMOVED: The hcloud_load_balancer_service_certificate resource block has been deleted.
