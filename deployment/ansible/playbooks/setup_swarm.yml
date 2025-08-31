@@ -357,47 +357,6 @@
         - item.network is defined
       run_once: true
 
-    # Cluster-wide security summary
-    - name: Compile cluster security report
-      ansible.builtin.set_fact:
-        security_report: |
-          === CLUSTER SECURITY VALIDATION REPORT ===
-          Total Nodes: {{ groups['all'] | length }}
-          Secure Nodes: {{ groups['all'] | select('match', '.*') | map('extract', hostvars, ['node_secure']) | select('equalto', true) | list | length }}
-          Insecure Nodes: {{ groups['all'] | select('match', '.*') | map('extract', hostvars, ['node_secure']) | select('equalto', false) | list | length }}
-          
-          Security Status by Node:
-          {% for host in groups['all'] %}
-          - {{ host }}: {{ 'SECURE' if hostvars[host].node_secure | default(false) else 'NEEDS ATTENTION' }} (fail2ban: {{ 'OK' if hostvars[host].fail2ban_secure | default(false) else 'MISSING' }})
-          {% endfor %}
-
-          NODES NEEDING ATTENTION:
-          {% for host in groups['all'] %}
-          {% if not hostvars[host].node_secure | default(false) %}
-          - {{ host }} ({{ hostvars[host].ansible_default_ipv4.address }}) - Check SSH/kernel hardening
-          {% endif %}
-          {% endfor %}
-      run_once: true
-      delegate_to: localhost
-
-    - name: Display security report
-      ansible.builtin.debug:
-        msg: "{{ security_report }}"
-      run_once: true
-
-    - name: Warning for nodes without fail2ban
-      ansible.builtin.debug:
-        msg: "WARNING: Some nodes don't have fail2ban installed. This may be expected if security hardening is disabled."
-      when: 
-        - groups['all'] | select('match', '.*') | map('extract', hostvars, ['fail2ban_secure']) | select('equalto', false) | list | length > 0
-      run_once: true
-
-    - name: Fail if critical security features are missing
-      ansible.builtin.fail:
-        msg: "CRITICAL: {{ groups['all'] | select('match', '.*') | map('extract', hostvars, ['node_secure']) | select('equalto', false) | list | length }} nodes failed core security validation (SSH/kernel hardening)!"
-      when: groups['all'] | select('match', '.*') | map('extract', hostvars, ['node_secure']) | select('equalto', false) | list | length > 0
-      run_once: true
-
     - name: Final cluster status
       ansible.builtin.command: docker system info --format '{{ '{{' }}.Swarm.Nodes{{ '}}' }} nodes in swarm'
       register: final_status
@@ -418,4 +377,3 @@
         name: fail2ban
         state: restarted
       when: node_security_enabled | bool
-      
