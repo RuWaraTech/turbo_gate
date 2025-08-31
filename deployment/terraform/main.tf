@@ -209,7 +209,7 @@ resource "hcloud_server" "manager" {
   }
 }
 
-# Worker Nodes
+# Worker Nodes - UPDATED with explicit dependencies
 resource "hcloud_server" "worker" {
   count       = var.worker_count
   name        = "turbogate-worker-${count.index + 1}"
@@ -248,6 +248,16 @@ resource "hcloud_server" "worker" {
     waf_enabled       = var.waf_enabled ? "true" : "false"
     worker_id         = count.index + 1
   }
+  
+  # ADDED: Explicit dependencies to prevent network attachment issues
+  depends_on = [
+    hcloud_network.main,
+    hcloud_network_subnet.application,
+    hcloud_firewall.ssh_access,
+    hcloud_firewall.waf,
+    hcloud_firewall.internal_app,
+    hcloud_firewall.docker_swarm
+  ]
 }
 
 # Generate Ansible inventory
