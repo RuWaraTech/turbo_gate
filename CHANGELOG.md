@@ -1,3 +1,9 @@
+## v0.9.2 (2025-08-31)
+
+### fix
+
+- reducing the number of workers
+
 ## v0.9.1 (2025-08-31)
 
 ### fix
