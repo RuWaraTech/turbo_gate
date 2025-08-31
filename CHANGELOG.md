@@ -1,3 +1,13 @@
+## v0.8.0 (2025-08-31)
+
+### feat
+
+- conditional load balancer creation and ansible inventory template
+
+### fix
+
+- correct firewall attachment for load balancer resources
+
 ## v0.7.31 (2025-08-30)
 
 ### fix
