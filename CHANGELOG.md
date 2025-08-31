@@ -1,3 +1,9 @@
+## v0.9.4 (2025-08-31)
+
+### fix
+
+- UPDATED with explicit dependencies
+
 ## v0.9.3 (2025-08-31)
 
 ## v0.9.2 (2025-08-31)
