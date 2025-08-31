@@ -1,3 +1,9 @@
+## v0.9.5 (2025-08-31)
+
+### fix
+
+-  removed managed certs as cerbot is handling these
+
 ## v0.9.4 (2025-08-31)
 
 ### fix
