@@ -1,3 +1,9 @@
+## v0.8.2 (2025-08-31)
+
+### fix
+
+- use an algorithm block with a type parameter instead of the algorithm_type parameter directly.
+
 ## v0.8.1 (2025-08-31)
 
 ### fix
