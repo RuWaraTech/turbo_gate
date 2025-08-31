@@ -49,7 +49,7 @@ resource "hcloud_load_balancer_network" "main" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
   network_id       = hcloud_network.main.id
-  ip               = "10.0.0.2"
+  # Remove the static IP - let Hetzner assign one automatically
   
   depends_on = [
     hcloud_network_subnet.main
@@ -106,9 +106,9 @@ resource "hcloud_load_balancer_service" "http" {
   
   http {
     sticky_sessions = var.enable_sticky_sessions
-    redirect_http   = var.enable_ssl_redirect
     cookie_name     = var.enable_sticky_sessions ? "TURBOGATE_LB" : null
     cookie_lifetime = var.enable_sticky_sessions ? 3600 : null
+    # Remove redirect_http from HTTP service - it's only for HTTPS
   }
 }
 
@@ -136,15 +136,16 @@ resource "hcloud_load_balancer_service" "https" {
   
   http {
     sticky_sessions = var.enable_sticky_sessions
+    redirect_http   = var.enable_ssl_redirect
     cookie_name     = var.enable_sticky_sessions ? "TURBOGATE_LB" : null
     cookie_lifetime = var.enable_sticky_sessions ? 3600 : null
-    certificates    = var.enable_load_balancer ? [hcloud_managed_certificate.main[0].id] : []
+    certificates    = (var.enable_load_balancer && var.domain_name != "turbogate.app") ? [hcloud_managed_certificate.main[0].id] : []
   }
 }
 
-# Managed Certificate (conditional)
+# Managed Certificate (conditional on both load balancer and domain configuration)
 resource "hcloud_managed_certificate" "main" {
-  count        = var.enable_load_balancer ? 1 : 0
+  count        = var.enable_load_balancer && var.domain_name != "turbogate.app" ? 1 : 0
   name         = "turbogate-cert-${var.environment}"
   domain_names = length(var.ssl_domains) > 0 ? var.ssl_domains : [var.domain_name, "www.${var.domain_name}"]
   

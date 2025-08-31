@@ -289,7 +289,7 @@ resource "local_file" "ansible_inventory" {
     # Load Balancer configuration
     load_balancer_ip = var.enable_load_balancer ? hcloud_load_balancer.main[0].ipv4 : ""
     load_balancer_ipv6 = var.enable_load_balancer ? hcloud_load_balancer.main[0].ipv6 : ""
-    load_balancer_internal = "10.0.0.2"
+    load_balancer_internal = var.enable_load_balancer ? hcloud_load_balancer_network.main[0].ip : ""
     
     # WAF configuration
     waf_enabled = var.waf_enabled

@@ -41,12 +41,12 @@ output "load_balancer_targets" {
 
 # Certificate Outputs
 output "certificate_domains" {
-  value       = var.enable_load_balancer ? hcloud_managed_certificate.main[0].domain_names : []
+  value       = (var.enable_load_balancer && var.domain_name != "turbogate.app") ? hcloud_managed_certificate.main[0].domain_names : []
   description = "Domains covered by the managed certificate"
 }
 
 output "certificate_id" {
-  value       = var.enable_load_balancer ? hcloud_managed_certificate.main[0].id : "N/A"
+  value       = (var.enable_load_balancer && var.domain_name != "turbogate.app") ? hcloud_managed_certificate.main[0].id : "N/A"
   description = "ID of the managed certificate"
 }
 
@@ -98,7 +98,7 @@ output "network_topology" {
     management_subnet = hcloud_network_subnet.main.ip_range
     application_subnet = hcloud_network_subnet.application.ip_range
     database_subnet = hcloud_network_subnet.database.ip_range
-    load_balancer_ip = var.enable_load_balancer ? "10.0.0.2" : "N/A"
+    load_balancer_ip = var.enable_load_balancer ? hcloud_load_balancer_network.main[0].ip : "N/A"
   }
   description = "Network topology information"
 }
