@@ -1,3 +1,9 @@
+## v0.9.11 (2025-08-31)
+
+### fix
+
+- hardening the servers only
+
 ## v0.9.10 (2025-08-31)
 
 ### fix
