@@ -1,5 +1,5 @@
 - name: Setup Docker Swarm Cluster on Hetzner Cloud
-  hosts: all
+  hosts: swarm_managers:swarm_workers
   become: yes
   gather_facts: yes
   vars:

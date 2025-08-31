@@ -54,6 +54,15 @@ resource "hcloud_firewall" "ssh_access" {
     source_ips  = var.allowed_ssh_ips
     description = "SSH access from allowed IPs only"
   }
+
+    # INTERNAL SSH access (for Ansible and management)
+  rule {
+    direction   = "in"
+    protocol    = "tcp"
+    port        = "22"
+    source_ips  = ["10.0.0.0/16"]  # Internal network
+    description = "SSH access from internal network"
+  }
   
   rule {
     direction   = "in"
