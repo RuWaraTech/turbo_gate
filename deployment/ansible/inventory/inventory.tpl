@@ -9,16 +9,14 @@ all:
           
     swarm_workers:
       hosts:
-        turbogate-worker-1:
-          ansible_host: ${worker_1_ip}
+        %{ for i, ip in worker_ips ~}
+        turbogate-worker-${i + 1}:
+          ansible_host: ${ip}
           ansible_user: root
-          internal_ip: ${worker_1_internal}
-          
-        turbogate-worker-2:
-          ansible_host: ${worker_2_ip}
-          ansible_user: root
-          internal_ip: ${worker_2_internal}
-          
+          internal_ip: ${worker_internals[i]}
+        %{ endfor ~}
+        
+    %{ if enable_load_balancer ~}
     load_balancer:
       hosts:
         turbogate-lb:
@@ -26,6 +24,7 @@ all:
           ansible_user: root
           internal_ip: ${load_balancer_internal}
           ipv6_address: ${load_balancer_ipv6}
+    %{ endif ~}
       
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
@@ -33,8 +32,13 @@ all:
     
     # Load Balancer configuration
     load_balancer_enabled: ${enable_load_balancer}
+    %{ if enable_load_balancer ~}
     load_balancer_ip: ${load_balancer_ip}
     load_balancer_ipv6: ${load_balancer_ipv6}
+    %{ else ~}
+    load_balancer_ip: ""
+    load_balancer_ipv6: ""
+    %{ endif ~}
     
     # WAF configuration
     waf_enabled: ${waf_enabled}
@@ -47,8 +51,8 @@ all:
     fail2ban_enabled: ${fail2ban_enabled}
     
     # fail2ban settings
-    fail2ban_bantime: ${fail2ban_bantime}
-    fail2ban_findtime: ${fail2ban_findtime}
+    fail2ban_bantime: "${fail2ban_bantime}"
+    fail2ban_findtime: "${fail2ban_findtime}"
     fail2ban_maxretry: ${fail2ban_maxretry}
     ssh_maxretry: ${ssh_maxretry}
     
