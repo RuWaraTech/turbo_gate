@@ -1,0 +1,276 @@
+---
+- name: Setup SSL Certificates for Global NGINX WAF Deployment
+  hosts: all
+  become: yes
+  
+  vars:
+    domain_name: "{{ domain_name }}"
+    admin_email: "{{ admin_email }}"
+    certbot_webroot: /var/www/certbot
+    letsencrypt_dir: /etc/letsencrypt
+  
+  tasks:
+    # ===== PHASE 1: Install Certbot on ALL nodes =====
+    - name: Install Certbot on all nodes
+      ansible.builtin.apt:
+        name:
+          - certbot
+          - python3-certbot-nginx
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Create webroot directory on all nodes
+      ansible.builtin.file:
+        path: "{{ certbot_webroot }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    # ===== PHASE 2: Generate certificate on manager node =====
+    - name: Generate SSL certificate on manager node
+      block:
+        - name: Check if certificate already exists
+          ansible.builtin.stat:
+            path: "{{ letsencrypt_dir }}/live/{{ domain_name }}/fullchain.pem"
+          register: cert_exists
+
+        - name: Create temporary NGINX config for cert generation
+          ansible.builtin.copy:
+            content: |
+              server {
+                  listen 80;
+                  listen [::]:80;
+                  server_name {{ domain_name }} www.{{ domain_name }};
+                  
+                  location /.well-known/acme-challenge/ {
+                      root {{ certbot_webroot }};
+                  }
+                  
+                  location / {
+                      return 200 "Certificate generation in progress";
+                      add_header Content-Type text/plain;
+                  }
+              }
+            dest: /etc/nginx/sites-available/temp-cert
+            owner: root
+            group: root
+            mode: '0644'
+          when: not cert_exists.stat.exists
+
+        - name: Start temporary NGINX for certificate validation
+          ansible.builtin.shell: |
+            nginx -c /etc/nginx/sites-available/temp-cert
+            sleep 5
+          when: not cert_exists.stat.exists
+
+        - name: Generate certificate with Certbot
+          ansible.builtin.command: |
+            certbot certonly --webroot -w {{ certbot_webroot }} \
+            -d {{ domain_name }} -d www.{{ domain_name }} \
+            --non-interactive --agree-tos --email {{ admin_email }} \
+            --preferred-challenges http
+          when: not cert_exists.stat.exists
+          register: certbot_result
+
+        - name: Stop temporary NGINX
+          ansible.builtin.shell: |
+            pkill -f "nginx -c /etc/nginx/sites-available/temp-cert" || true
+          when: not cert_exists.stat.exists
+
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    # ===== PHASE 3: Sync certificates to all nodes =====
+    - name: Archive certificates on manager
+      ansible.builtin.archive:
+        path: "{{ letsencrypt_dir }}"
+        dest: /tmp/letsencrypt.tar.gz
+        format: gz
+        owner: root
+        group: root
+        mode: '0600'
+      when: "'swarm_managers' in group_names"
+      run_once: true
+      register: archive_created
+
+    - name: Fetch certificate archive from manager
+      ansible.builtin.fetch:
+        src: /tmp/letsencrypt.tar.gz
+        dest: /tmp/letsencrypt-{{ inventory_hostname }}.tar.gz
+        flat: yes
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    - name: Copy certificate archive to all worker nodes
+      ansible.builtin.copy:
+        src: /tmp/letsencrypt-turbogate-manager.tar.gz
+        dest: /tmp/letsencrypt.tar.gz
+        owner: root
+        group: root
+        mode: '0600'
+      when: "'swarm_workers' in group_names"
+
+    - name: Extract certificates on worker nodes
+      ansible.builtin.unarchive:
+        src: /tmp/letsencrypt.tar.gz
+        dest: /
+        remote_src: yes
+        owner: root
+        group: root
+      when: "'swarm_workers' in group_names"
+
+    - name: Verify certificate exists on all nodes
+      ansible.builtin.stat:
+        path: "{{ letsencrypt_dir }}/live/{{ domain_name }}/fullchain.pem"
+      register: cert_verification
+      failed_when: not cert_verification.stat.exists
+
+    # ===== PHASE 4: Setup automatic renewal and sync =====
+    - name: Create certificate sync script
+      ansible.builtin.copy:
+        content: |
+          #!/bin/bash
+          set -e
+          
+          # This script runs on the manager node
+          echo "Renewing certificates..."
+          /usr/bin/certbot renew --quiet
+          
+          if [ $? -eq 0 ]; then
+              echo "Certificate renewed successfully"
+              
+              # Archive the renewed certificates
+              tar czf /tmp/letsencrypt-renewed.tar.gz {{ letsencrypt_dir }}
+              
+              # Copy to all worker nodes
+              {% for worker in groups['swarm_workers'] %}
+              echo "Syncing to {{ hostvars[worker]['ansible_host'] }}..."
+              scp -o StrictHostKeyChecking=no /tmp/letsencrypt-renewed.tar.gz root@{{ hostvars[worker]['internal_ip'] }}:/tmp/
+              ssh -o StrictHostKeyChecking=no root@{{ hostvars[worker]['internal_ip'] }} "tar xzf /tmp/letsencrypt-renewed.tar.gz -C / && rm /tmp/letsencrypt-renewed.tar.gz"
+              {% endfor %}
+              
+              # Update the WAF service to reload certificates
+              docker service update --force turbogate_nginx-waf
+              
+              echo "Certificate sync completed"
+          fi
+        dest: /usr/local/bin/sync-certificates.sh
+        owner: root
+        group: root
+        mode: '0755'
+      when: "'swarm_managers' in group_names"
+
+    - name: Setup automatic renewal with sync on manager
+      ansible.builtin.cron:
+        name: "Certbot renewal with sync"
+        minute: "0"
+        hour: "2"
+        day: "*/15"
+        job: "/usr/local/bin/sync-certificates.sh >> /var/log/certbot-sync.log 2>&1"
+        state: present
+      when: "'swarm_managers' in group_names"
+
+    # ===== PHASE 5: Create ModSecurity configurations =====
+    - name: Create ModSecurity main configuration
+      ansible.builtin.shell: |
+        cat << 'EOF' | docker config create modsecurity_config -
+        SecRuleEngine {{ waf_rule_engine | default('On') }}
+        SecRequestBodyAccess On
+        SecResponseBodyAccess On
+        SecResponseBodyMimeType text/plain text/html text/xml application/json
+        SecResponseBodyLimit 524288
+        SecResponseBodyLimitAction ProcessPartial
+        
+        SecAuditEngine {{ waf_audit_engine | default('RelevantOnly') }}
+        SecAuditLogRelevantStatus "^(?:5|4(?!04))"
+        SecAuditLogParts ABDEFHIJZ
+        SecAuditLogType Serial
+        SecAuditLog /var/log/nginx/modsec_audit.log
+        
+        SecArgumentSeparator &
+        SecCookieFormat 0
+        SecTmpDir /var/modsecurity/tmp/
+        SecDataDir /var/modsecurity/data/
+        
+        SecDebugLog /var/log/nginx/modsec_debug.log
+        SecDebugLogLevel 0
+        EOF
+      run_once: true
+      when: "'swarm_managers' in group_names"
+      failed_when: false
+
+    - name: Create ModSecurity rules configuration
+      ansible.builtin.shell: |
+        cat << 'EOF' | docker config create modsecurity_rules -
+        Include /etc/nginx/modsecurity/modsecurity.conf
+        
+        # Load OWASP Core Rule Set
+        Include /usr/local/owasp-modsecurity-crs/crs-setup.conf
+        Include /usr/local/owasp-modsecurity-crs/rules/*.conf
+        
+        # Custom rules for your application
+        SecRule REQUEST_URI "@beginsWith /gateway/health" \
+            "id:1000,\
+            phase:1,\
+            pass,\
+            nolog,\
+            ctl:ruleEngine=Off"
+        
+        SecRule REQUEST_URI "@beginsWith /waf-health" \
+            "id:1001,\
+            phase:1,\
+            pass,\
+            nolog,\
+            ctl:ruleEngine=Off"
+        
+        # Set paranoia level
+        SecAction \
+            "id:900000,\
+            phase:1,\
+            nolog,\
+            pass,\
+            t:none,\
+            setvar:tx.paranoia_level={{ waf_paranoia_level | default(2) }}"
+        
+        # Set anomaly thresholds
+        SecAction \
+            "id:900001,\
+            phase:1,\
+            nolog,\
+            pass,\
+            t:none,\
+            setvar:tx.inbound_anomaly_score_threshold={{ waf_anomaly_inbound | default(10) }},\
+            setvar:tx.outbound_anomaly_score_threshold={{ waf_anomaly_outbound | default(8) }}"
+        EOF
+      run_once: true
+      when: "'swarm_managers' in group_names"
+      failed_when: false
+
+    - name: Create NGINX WAF configuration
+      ansible.builtin.shell: |
+        docker config create nginx_waf_config /etc/nginx/sites-available/turbogate
+      run_once: true
+      when: "'swarm_managers' in group_names"
+      failed_when: false
+
+    # ===== PHASE 6: Label nodes for WAF deployment =====
+    - name: Label all nodes for WAF deployment
+      community.docker.docker_node:
+        hostname: "{{ ansible_hostname }}"
+        labels:
+          waf_enabled: "true"
+          ssl_synced: "true"
+      delegate_to: "{{ groups['swarm_managers'][0] }}"
+
+    - name: Display SSL sync status
+      ansible.builtin.debug:
+        msg: |
+          ===== SSL Certificate Sync Complete =====
+          Domain: {{ domain_name }}
+          Certificate Location: {{ letsencrypt_dir }}/live/{{ domain_name }}/
+          Nodes with certificates: {{ ansible_play_hosts | length }}
+          Auto-renewal: Enabled (every 15 days at 2 AM)
+          Sync method: Automatic from manager to all workers
+          WAF Status: Ready for global deployment

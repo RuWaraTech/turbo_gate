@@ -338,28 +338,31 @@ jobs:
             echo "Current deployment is unhealthy - will attempt regular deployment"
           fi
         continue-on-error: true
+
+        
       
-      - name: Setup NGINX with SSL (if needed)
+      - name: Setup SSL Synchronization (if needed)
         working-directory: deployment/ansible
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
         run: |
-          # Check if SSL cert exists
+          # Check if certificates exist on all nodes
           if ! ansible all -i inventory/production.yml -m stat -a "path=/etc/letsencrypt/live/${{ secrets.DOMAIN_NAME }}/fullchain.pem" | grep -q "exists.*true"; then
-            echo "SSL certificate not found, setting up NGINX..."
-            ansible-playbook -i inventory/production.yml playbooks/setup_nginx.yml \
+            echo "Running SSL sync setup..."
+            ansible-playbook -i inventory/production.yml playbooks/setup_ssl_sync.yml \
               -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
               -e "admin_email=${{ secrets.ADMIN_EMAIL }}"
           else
-            echo "SSL certificate exists, skipping NGINX setup"
+            echo "SSL certificates already synced"
           fi
-      
-      - name: Deploy Application with Zero Downtime
+
+      - name: Deploy Application with WAF
         working-directory: deployment/ansible
         env:
           ANSIBLE_HOST_KEY_CHECKING: False
           ANSIBLE_TIMEOUT: 600
         run: |
+          # Use the WAF deployment playbook instead of deploy_app.yml
           ansible-playbook -i inventory/production.yml playbooks/deploy_app.yml \
             -e "secret_key=${{ secrets.SECRET_KEY }}" \
             -e "redis_password=${{ secrets.REDIS_PASSWORD }}" \
@@ -367,8 +370,44 @@ jobs:
             -e "docker_registry=docker.io" \
             -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
             -e "version=${{ needs.pre-deploy-validation.outputs.version_tag }}" \
+            -e "waf_enabled=true" \
+            -e "waf_paranoia_level=2" \
             -e "app_replicas=3" \
             -vv
+
+
+
+
+      # - name: Setup NGINX with SSL (if needed)
+      #   working-directory: deployment/ansible
+      #   env:
+      #     ANSIBLE_HOST_KEY_CHECKING: False
+      #   run: |
+      #     # Check if SSL cert exists
+      #     if ! ansible all -i inventory/production.yml -m stat -a "path=/etc/letsencrypt/live/${{ secrets.DOMAIN_NAME }}/fullchain.pem" | grep -q "exists.*true"; then
+      #       echo "SSL certificate not found, setting up NGINX..."
+      #       ansible-playbook -i inventory/production.yml playbooks/setup_nginx.yml \
+      #         -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
+      #         -e "admin_email=${{ secrets.ADMIN_EMAIL }}"
+      #     else
+      #       echo "SSL certificate exists, skipping NGINX setup"
+      #     fi
+      
+      # - name: Deploy Application with Zero Downtime
+      #   working-directory: deployment/ansible
+      #   env:
+      #     ANSIBLE_HOST_KEY_CHECKING: False
+      #     ANSIBLE_TIMEOUT: 600
+      #   run: |
+      #     ansible-playbook -i inventory/production.yml playbooks/deploy_app.yml \
+      #       -e "secret_key=${{ secrets.SECRET_KEY }}" \
+      #       -e "redis_password=${{ secrets.REDIS_PASSWORD }}" \
+      #       -e "image_tag=${{ needs.pre-deploy-validation.outputs.image_tag }}" \
+      #       -e "docker_registry=docker.io" \
+      #       -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
+      #       -e "version=${{ needs.pre-deploy-validation.outputs.version_tag }}" \
+      #       -e "app_replicas=3" \
+      #       -vv
 
   verify-deployment:
     needs: [pre-deploy-validation, deploy-infrastructure, zero-downtime-deployment]

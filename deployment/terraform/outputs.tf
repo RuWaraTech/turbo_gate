@@ -81,7 +81,7 @@ output "application_endpoints" {
     main_url     = "https://${var.domain_name}"
     health_check = "https://${var.domain_name}/health"
     gateway      = "https://${var.domain_name}/gateway/health"
-    waf_health   = var.enable_load_balancer ? "http://${hcloud_load_balancer.main[0].ipv4}/waf-health" : "N/A"
+    waf_health   = var.enable_load_balancer ? "http://${hcloud_load_balancer.main[0].ipv4}/health" : "N/A"
   }
   description = "Application access endpoints"
 }
