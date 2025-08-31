@@ -28,7 +28,7 @@ all:
       
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
-    ansible_python_interpreter: /usr/bin/python3
+    ansible_python_interpreter: '/usr/bin/python3'
     
     # Load Balancer configuration
     load_balancer_enabled: ${enable_load_balancer}
