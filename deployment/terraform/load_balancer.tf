@@ -76,24 +76,18 @@ resource "hcloud_load_balancer_target" "all_nodes" {
 resource "hcloud_load_balancer_service" "http" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
-  protocol         = "tcp"  # Changed to TCP for PROXY protocol
+  protocol         = "tcp"  # TCP for PROXY protocol
   listen_port      = 80
   destination_port = 80
   proxyprotocol    = var.enable_proxy_protocol
   
   health_check {
-    protocol = "http"
+    protocol = "tcp"  # CHANGED: TCP health check for TCP service
     port     = 80
     interval = var.health_check_interval
     timeout  = var.health_check_timeout
     retries  = var.health_check_retries
-    
-    http {
-      path         = "/waf-health"
-      status_codes = ["200", "301", "302"]
-      tls          = false
-      # Domain not needed for internal health checks
-    }
+    # REMOVED: http block (not compatible with TCP protocol)
   }
 }
 
@@ -101,31 +95,25 @@ resource "hcloud_load_balancer_service" "http" {
 resource "hcloud_load_balancer_service" "https" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
-  protocol         = "tcp"  # Changed to TCP for PROXY protocol
+  protocol         = "tcp"  # TCP for PROXY protocol
   listen_port      = 443
   destination_port = 443
   proxyprotocol    = var.enable_proxy_protocol
   
   health_check {
-    protocol = "https"
+    protocol = "tcp"  # CHANGED: TCP health check for TCP service
     port     = 443
     interval = var.health_check_interval
     timeout  = var.health_check_timeout
     retries  = var.health_check_retries
-    
-    http {
-      path         = "/waf-health"
-      status_codes = ["200"]
-      domain       = var.domain_name
-      tls          = true
-    }
+    # REMOVED: http block (not compatible with TCP protocol)
   }
 }
 
-# Managed Certificate
+# Managed Certificate with unique name
 resource "hcloud_managed_certificate" "main" {
   count        = var.enable_load_balancer && var.ssl_certificate_type == "managed" ? 1 : 0
-  name         = "turbogate-cert-${var.environment}"
+  name         = "turbogate-cert-${var.environment}-${formatdate("YYYYMMDD-HHmm", timestamp())}"  # CHANGED: Added timestamp for uniqueness
   domain_names = length(var.ssl_domains) > 0 ? var.ssl_domains : [var.domain_name, "www.${var.domain_name}"]
   
   labels = {
@@ -135,6 +123,7 @@ resource "hcloud_managed_certificate" "main" {
   
   lifecycle {
     create_before_destroy = true
+    ignore_changes = [name]  # ADDED: Prevent recreation on timestamp changes
   }
 }
 
