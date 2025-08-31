@@ -3,26 +3,44 @@ all:
     swarm_managers:
       hosts:
         turbogate-manager:
-          ansible_host: "${manager_ip}"
+          ansible_host: ${manager_ip}
           ansible_user: root
           internal_ip: ${manager_internal}
           
-    workers:
+    swarm_workers:
       hosts:
         turbogate-worker-1:
-          ansible_host: "${worker_1_ip}"
+          ansible_host: ${worker_1_ip}
           ansible_user: root
           internal_ip: ${worker_1_internal}
           
         turbogate-worker-2:
-          ansible_host: "${worker_2_ip}"
+          ansible_host: ${worker_2_ip}
           ansible_user: root
           internal_ip: ${worker_2_internal}
           
+    load_balancer:
+      hosts:
+        turbogate-lb:
+          ansible_host: ${load_balancer_ip}
+          ansible_user: root
+          internal_ip: ${load_balancer_internal}
+          ipv6_address: ${load_balancer_ipv6}
+      
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
     ansible_python_interpreter: /usr/bin/python3
-    floating_ip: "${floating_ip}"
+    
+    # Load Balancer configuration
+    load_balancer_enabled: ${enable_load_balancer}
+    load_balancer_ip: ${load_balancer_ip}
+    load_balancer_ipv6: ${load_balancer_ipv6}
+    
+    # WAF configuration
+    waf_enabled: ${waf_enabled}
+    waf_paranoia_level: ${waf_paranoia_level}
+    waf_anomaly_inbound: ${waf_anomaly_inbound}
+    waf_anomaly_outbound: ${waf_anomaly_outbound}
     
     # Security configuration
     security_enabled: ${security_enabled}
@@ -36,23 +54,23 @@ all:
     
     # Network segmentation
     network_subnets:
-      management: "${network_subnets.management}"
-      application: "${network_subnets.application}"
-      database: "${network_subnets.database}"
-      monitoring: "${network_subnets.monitoring}"
+      management: "${network_subnets["management"]}"
+      application: "${network_subnets["application"]}"
+      database: "${network_subnets["database"]}"
+      monitoring: "${network_subnets["monitoring"]}"
     
     # Docker Swarm security
     swarm_encryption_enabled: ${swarm_encryption_enabled}
     swarm_networks:
       frontend:
-        subnet: "${swarm_networks.frontend.subnet}"
-        encrypted: ${swarm_networks.frontend.encrypted}
+        subnet: "${swarm_networks["frontend"]["subnet"]}"
+        encrypted: ${swarm_networks["frontend"]["encrypted"]}
       backend:
-        subnet: "${swarm_networks.backend.subnet}"
-        encrypted: ${swarm_networks.backend.encrypted}
+        subnet: "${swarm_networks["backend"]["subnet"]}"
+        encrypted: ${swarm_networks["backend"]["encrypted"]}
       database:
-        subnet: "${swarm_networks.database.subnet}"
-        encrypted: ${swarm_networks.database.encrypted}
+        subnet: "${swarm_networks["database"]["subnet"]}"
+        encrypted: ${swarm_networks["database"]["encrypted"]}
     
     # Automatic updates configuration
     automatic_reboot: false

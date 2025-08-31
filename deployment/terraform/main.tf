@@ -27,7 +27,6 @@ resource "hcloud_network_subnet" "application" {
   type         = "cloud"
   network_zone = "eu-central"  
   ip_range     = "10.0.2.0/24"
-  
 }
 
 resource "hcloud_network_subnet" "database" {
@@ -35,7 +34,6 @@ resource "hcloud_network_subnet" "database" {
   type         = "cloud"
   network_zone = "eu-central"
   ip_range     = "10.0.3.0/24"
-  
 }
 
 # Enhanced firewalls with granular rules
@@ -63,27 +61,28 @@ resource "hcloud_firewall" "ssh_access" {
   }
 }
 
-resource "hcloud_firewall" "manager_web" {
-  name = "turbogate-manager-web-fw"
+resource "hcloud_firewall" "internal_web" {
+  name = "turbogate-internal-web-fw"
 
+  # Only allow HTTP/HTTPS from Load Balancer and internal networks
   rule {
     direction   = "in"
     protocol    = "tcp"
     port        = "80"
-    source_ips  = ["0.0.0.0/0", "::/0"]
-    description = "Allow HTTP traffic"
+    source_ips  = ["10.0.0.0/16"]  # Internal network only (includes LB)
+    description = "HTTP from internal network and LB"
   }
 
   rule {
     direction   = "in"
     protocol    = "tcp"
     port        = "443"
-    source_ips  = ["0.0.0.0/0", "::/0"]
-    description = "Allow HTTPS traffic"
+    source_ips  = ["10.0.0.0/16"]
+    description = "HTTPS from internal network"
   }
 
   labels = {
-    purpose     = "manager-web-access"
+    purpose     = "internal-web-access"
     environment = var.environment
   }
 }
@@ -143,7 +142,7 @@ resource "hcloud_server" "manager" {
   
   # Apply multiple firewalls for layered security
   firewall_ids = [
-    hcloud_firewall.manager_web.id,
+    hcloud_firewall.internal_web.id,
     hcloud_firewall.ssh_access.id,
     hcloud_firewall.docker_swarm_enhanced.id
   ]
@@ -213,8 +212,8 @@ resource "hcloud_server" "worker" {
   # Workers have more restrictive firewall setup (no direct web access)
   firewall_ids = [
     hcloud_firewall.ssh_access.id,        # SSH access
+    hcloud_firewall.internal_web.id,      # Add this for LB to reach workers
     hcloud_firewall.docker_swarm_enhanced.id  # Docker Swarm only
-    # Note: Intentionally NOT including main firewall (no HTTP/HTTPS on workers)
   ]
   
   network {
@@ -269,20 +268,6 @@ EOL
   }
 }
 
-# Floating IP for high availability
-resource "hcloud_floating_ip" "main" {
-  type          = "ipv4"
-  home_location = var.location
-  description   = "TurboGate Floating IP"
-}
-
-# Auto-assign floating IP to manager
-resource "hcloud_floating_ip_assignment" "main" {
-  floating_ip_id = hcloud_floating_ip.main.id
-  server_id      = hcloud_server.manager.id
-}
-
-# Generate Ansible inventory
 resource "local_file" "ansible_inventory" {
   content = templatefile("${path.module}/../ansible/inventory/inventory.tpl", {
     manager_ip       = hcloud_server.manager.ipv4_address
@@ -291,27 +276,37 @@ resource "local_file" "ansible_inventory" {
     worker_1_internal = "10.0.2.11"
     worker_2_ip      = hcloud_server.worker[1].ipv4_address
     worker_2_internal = "10.0.2.12"
-    floating_ip      = hcloud_floating_ip.main.ip_address
     
-    # Security configuration
+    enable_load_balancer = var.enable_load_balancer
+
+    # Load Balancer configuration
+    load_balancer_ip = var.enable_load_balancer ? hcloud_load_balancer.main[0].ipv4 : ""
+    load_balancer_ipv6 = var.enable_load_balancer ? hcloud_load_balancer.main[0].ipv6 : ""
+    load_balancer_internal = "10.0.0.2"
+    
+    # WAF configuration
+    waf_enabled = var.waf_enabled
+    waf_paranoia_level = var.waf_paranoia_level
+    waf_anomaly_inbound = var.waf_anomaly_inbound
+    waf_anomaly_outbound = var.waf_anomaly_outbound
+    
+    # Existing security configuration
     security_enabled = var.enable_security_hardening
     fail2ban_enabled = var.enable_security_hardening
-    
-    # fail2ban settings
     fail2ban_bantime = var.fail2ban_config.bantime
     fail2ban_findtime = var.fail2ban_config.findtime
     fail2ban_maxretry = var.fail2ban_config.maxretry
     ssh_maxretry = var.fail2ban_config.ssh_maxretry
     
-    # Network segmentation
+    # Network configuration
     network_subnets = {
       management   = "10.0.1.0/24"
-      application  = "10.0.2.0/24" 
+      application  = "10.0.2.0/24"
       database     = "10.0.3.0/24"
       monitoring   = "10.0.4.0/24"
     }
     
-    # Docker Swarm security
+    # Docker Swarm configuration
     swarm_encryption_enabled = true
     swarm_networks = {
       frontend = {
@@ -329,15 +324,10 @@ resource "local_file" "ansible_inventory" {
     }
   })
   filename = "${path.module}/../ansible/inventory/production.yml"
-}
-
-# Output for debugging
-output "all_network_ips" {
-  value = {
-    manager_public = hcloud_server.manager.ipv4_address
-    manager_internal = [for net in hcloud_server.manager.network : net.ip][0]
-    workers_public = [for s in hcloud_server.worker : s.ipv4_address]
-    workers_internal = [for s in hcloud_server.worker : [for net in s.network : net.ip][0]]
-  }
-  description = "All network IPs for verification"
+  
+  depends_on = [
+    hcloud_server.manager,
+    hcloud_server.worker,
+    hcloud_load_balancer.main
+  ]
 }
