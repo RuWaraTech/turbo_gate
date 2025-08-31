@@ -190,7 +190,7 @@ resource "hcloud_server" "manager" {
     ip         = "10.0.1.10"
   }
   
-  user_data = templatefile("${path.module}/scripts/node_init.sh", {
+  user_data = templatefile("${path.module}/../scripts/node_init.sh", {
     node_type           = "manager"
     node_index          = 0
     manager_ip          = "10.0.1.10"
@@ -230,7 +230,7 @@ resource "hcloud_server" "worker" {
     ip         = "10.0.2.${11 + count.index}"
   }
   
-  user_data = templatefile("${path.module}/scripts/node_init.sh", {
+  user_data = templatefile("${path.module}/../scripts/node_init.sh", {
     node_type           = "worker"
     node_index          = count.index + 1
     manager_ip          = "10.0.1.10"
