@@ -2,6 +2,11 @@
 # Node initialization script - SSH Hardening & Host Security Only
 set -e
 
+
+# Update and install base packages
+apt-get update
+apt-get install -y python3 python3-pip net-tools curl jq
+
 # Variables passed from Terraform
 NODE_TYPE="${node_type}"
 NODE_INDEX="${node_index}"
@@ -16,9 +21,7 @@ FAIL2BAN_FINDTIME=$(echo "$FAIL2BAN_CONFIG_JSON" | jq -r '.findtime')
 FAIL2BAN_MAXRETRY=$(echo "$FAIL2BAN_CONFIG_JSON" | jq -r '.maxretry')
 FAIL2BAN_SSH_MAXRETRY=$(echo "$FAIL2BAN_CONFIG_JSON" | jq -r '.ssh_maxretry')
 
-# Update and install base packages
-apt-get update
-apt-get install -y python3 python3-pip net-tools curl jq
+
 
 # Configure hosts file for internal DNS
 echo "$MANAGER_IP turbogate-manager" >> /etc/hosts
