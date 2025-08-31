@@ -136,17 +136,17 @@ variable "health_check_retries" {
   default     = 3
 }
 
-# WAF Configuration
+# WAF Configuration - UPDATED for OWASP ModSecurity
 variable "waf_enabled" {
-  description = "Enable OWASP ModSecurity WAF"
+  description = "Enable OWASP ModSecurity WAF via NGINX"
   type        = bool
   default     = true
 }
 
 variable "waf_paranoia_level" {
-  description = "OWASP ModSecurity paranoia level (1-4)"
+  description = "OWASP ModSecurity Core Rule Set paranoia level (1-4)"
   type        = number
-  default     = 1
+  default     = 2  # Increased from 1 for better protection
   
   validation {
     condition     = var.waf_paranoia_level >= 1 && var.waf_paranoia_level <= 4
@@ -157,13 +157,35 @@ variable "waf_paranoia_level" {
 variable "waf_anomaly_inbound" {
   description = "WAF inbound anomaly score threshold"
   type        = number
-  default     = 5
+  default     = 10  # Increased from 5 for paranoia level 2
 }
 
 variable "waf_anomaly_outbound" {
   description = "WAF outbound anomaly score threshold"
   type        = number
-  default     = 4
+  default     = 8  # Increased from 4 for paranoia level 2
+}
+
+variable "waf_audit_engine" {
+  description = "WAF audit engine mode (On, Off, RelevantOnly)"
+  type        = string
+  default     = "RelevantOnly"
+  
+  validation {
+    condition     = contains(["On", "Off", "RelevantOnly"], var.waf_audit_engine)
+    error_message = "WAF audit engine must be On, Off, or RelevantOnly"
+  }
+}
+
+variable "waf_rule_engine" {
+  description = "WAF rule engine mode (On, Off, DetectionOnly)"
+  type        = string
+  default     = "On"
+  
+  validation {
+    condition     = contains(["On", "Off", "DetectionOnly"], var.waf_rule_engine)
+    error_message = "WAF rule engine must be On, Off, or DetectionOnly"
+  }
 }
 
 # SSL Configuration
@@ -188,4 +210,34 @@ variable "ssl_domains" {
   description = "Domains for SSL certificate"
   type        = list(string)
   default     = []
+}
+
+# PROXY Protocol Configuration
+variable "enable_proxy_protocol" {
+  description = "Enable PROXY protocol for preserving client IPs"
+  type        = bool
+  default     = true
+}
+
+# NGINX Deployment Configuration
+variable "nginx_deployment_mode" {
+  description = "NGINX deployment mode (global or replicated)"
+  type        = string
+  default     = "global"
+  
+  validation {
+    condition     = contains(["global", "replicated"], var.nginx_deployment_mode)
+    error_message = "NGINX deployment mode must be either 'global' or 'replicated'"
+  }
+}
+
+variable "nginx_replicas" {
+  description = "Number of NGINX replicas (only used if deployment_mode is replicated)"
+  type        = number
+  default     = 2
+  
+  validation {
+    condition     = var.nginx_replicas >= 1 && var.nginx_replicas <= 10
+    error_message = "NGINX replicas must be between 1 and 10"
+  }
 }

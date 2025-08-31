@@ -1,6 +1,6 @@
-# Hetzner Load Balancer Configuration with Correct Syntax
+# Hetzner Load Balancer Configuration with PROXY Protocol Support
 
-# Firewall for Load Balancer (conditional)
+# Firewall for Load Balancer
 resource "hcloud_firewall" "load_balancer" {
   count = var.enable_load_balancer ? 1 : 0
   name  = "turbogate-lb-fw-${var.environment}"
@@ -22,15 +22,17 @@ resource "hcloud_firewall" "load_balancer" {
   labels = {
     purpose     = "load-balancer"
     environment = var.environment
+    waf_enabled = var.waf_enabled ? "true" : "false"
   }
 }
 
-# Create the Load Balancer (conditional)
+# Create the Load Balancer
 resource "hcloud_load_balancer" "main" {
   count              = var.enable_load_balancer ? 1 : 0
   name               = "turbogate-lb-${var.environment}"
   load_balancer_type = var.load_balancer_type
   location           = var.location
+  
   algorithm {
     type = var.load_balancer_algorithm
   }
@@ -39,29 +41,30 @@ resource "hcloud_load_balancer" "main" {
     app         = "turbogate"
     environment = var.environment
     managed_by  = "terraform"
+    waf_enabled = var.waf_enabled ? "true" : "false"
   }
   
   delete_protection = var.environment == "prod" ? true : false
 }
 
-# Attach Load Balancer to the private network (conditional)
+# Attach Load Balancer to the private network
 resource "hcloud_load_balancer_network" "main" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
   network_id       = hcloud_network.main.id
-  # Remove the static IP - let Hetzner assign one automatically
+  ip               = "10.0.4.10"  # Fixed IP in monitoring subnet
   
   depends_on = [
-    hcloud_network_subnet.main
+    hcloud_network_subnet.monitoring
   ]
 }
 
-# Target the manager node (conditional)
-resource "hcloud_load_balancer_target" "manager" {
-  count            = var.enable_load_balancer ? 1 : 0
+# Target all nodes for NGINX global deployment
+resource "hcloud_load_balancer_target" "all_nodes" {
+  count            = var.enable_load_balancer ? (1 + var.worker_count) : 0
   type             = "server"
   load_balancer_id = hcloud_load_balancer.main[0].id
-  server_id        = hcloud_server.manager.id
+  server_id        = count.index == 0 ? hcloud_server.manager.id : hcloud_server.worker[count.index - 1].id
   use_private_ip   = true
   
   depends_on = [
@@ -69,26 +72,14 @@ resource "hcloud_load_balancer_target" "manager" {
   ]
 }
 
-# Target worker nodes (conditional)
-resource "hcloud_load_balancer_target" "workers" {
-  count            = var.enable_load_balancer ? length(hcloud_server.worker) : 0
-  type             = "server"
-  load_balancer_id = hcloud_load_balancer.main[0].id
-  server_id        = hcloud_server.worker[count.index].id
-  use_private_ip   = true
-  
-  depends_on = [
-    hcloud_load_balancer_network.main
-  ]
-}
-
-# HTTP Service (redirects to HTTPS) (conditional)
+# HTTP Service (redirects to HTTPS)
 resource "hcloud_load_balancer_service" "http" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
-  protocol         = "http"
+  protocol         = "tcp"  # Changed to TCP for PROXY protocol
   listen_port      = 80
   destination_port = 80
+  proxyprotocol    = var.enable_proxy_protocol
   
   health_check {
     protocol = "http"
@@ -98,54 +89,42 @@ resource "hcloud_load_balancer_service" "http" {
     retries  = var.health_check_retries
     
     http {
-      path         = "/lb-health"
+      path         = "/waf-health"
       status_codes = ["200", "301", "302"]
       tls          = false
+      # Domain not needed for internal health checks
     }
-  }
-  
-  http {
-    sticky_sessions = var.enable_sticky_sessions
-    cookie_name     = var.enable_sticky_sessions ? "TURBOGATE_LB" : null
-    cookie_lifetime = var.enable_sticky_sessions ? 3600 : null
-    # Remove redirect_http from HTTP service - it's only for HTTPS
   }
 }
 
-# HTTPS Service (main traffic) (conditional)
+# HTTPS Service (main traffic with PROXY protocol)
 resource "hcloud_load_balancer_service" "https" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
-  protocol         = "https"
+  protocol         = "tcp"  # Changed to TCP for PROXY protocol
   listen_port      = 443
-  destination_port = 80  # WAF listens on 80, LB handles SSL
+  destination_port = 443
+  proxyprotocol    = var.enable_proxy_protocol
   
   health_check {
-    protocol = "http"
-    port     = 80
+    protocol = "https"
+    port     = 443
     interval = var.health_check_interval
     timeout  = var.health_check_timeout
     retries  = var.health_check_retries
     
     http {
-      path         = "/lb-health"
+      path         = "/waf-health"
       status_codes = ["200"]
-      tls          = false
+      domain       = var.domain_name
+      tls          = true
     }
-  }
-  
-  http {
-    sticky_sessions = var.enable_sticky_sessions
-    redirect_http   = var.enable_ssl_redirect
-    cookie_name     = var.enable_sticky_sessions ? "TURBOGATE_LB" : null
-    cookie_lifetime = var.enable_sticky_sessions ? 3600 : null
-    certificates    = (var.enable_load_balancer && var.domain_name != "turbogate.app") ? [hcloud_managed_certificate.main[0].id] : []
   }
 }
 
-# Managed Certificate (conditional on both load balancer and domain configuration)
+# Managed Certificate
 resource "hcloud_managed_certificate" "main" {
-  count        = var.enable_load_balancer && var.domain_name != "turbogate.app" ? 1 : 0
+  count        = var.enable_load_balancer && var.ssl_certificate_type == "managed" ? 1 : 0
   name         = "turbogate-cert-${var.environment}"
   domain_names = length(var.ssl_domains) > 0 ? var.ssl_domains : [var.domain_name, "www.${var.domain_name}"]
   
@@ -158,3 +137,7 @@ resource "hcloud_managed_certificate" "main" {
     create_before_destroy = true
   }
 }
+
+# Note: Since we're using TCP mode with PROXY protocol,
+# SSL termination happens at NGINX, not at the load balancer.
+# The certificate resource above is for reference/future use.
