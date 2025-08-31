@@ -1,5 +1,30 @@
 # Hetzner Load Balancer Configuration with Correct Syntax
 
+# Firewall for Load Balancer (conditional)
+resource "hcloud_firewall" "load_balancer" {
+  count = var.enable_load_balancer ? 1 : 0
+  name  = "turbogate-lb-fw-${var.environment}"
+  
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "80"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+  
+  rule {
+    direction  = "in"
+    protocol   = "tcp"
+    port       = "443"
+    source_ips = ["0.0.0.0/0", "::/0"]
+  }
+  
+  labels = {
+    purpose     = "load-balancer"
+    environment = var.environment
+  }
+}
+
 # Create the Load Balancer (conditional)
 resource "hcloud_load_balancer" "main" {
   count              = var.enable_load_balancer ? 1 : 0
@@ -14,6 +39,17 @@ resource "hcloud_load_balancer" "main" {
   }
   
   delete_protection = var.environment == "prod" ? true : false
+}
+
+# Attach Firewall to Load Balancer using apply_to
+resource "hcloud_firewall_apply_to" "load_balancer" {
+  count      = var.enable_load_balancer ? 1 : 0
+  firewall_id = hcloud_firewall.load_balancer[0].id
+  
+  apply_to {
+    type = "load_balancer"
+    load_balancer_id = hcloud_load_balancer.main[0].id
+  }
 }
 
 # Attach Load Balancer to the private network (conditional)
@@ -110,7 +146,7 @@ resource "hcloud_load_balancer_service" "https" {
     sticky_sessions = var.enable_sticky_sessions
     cookie_name     = var.enable_sticky_sessions ? "TURBOGATE_LB" : null
     cookie_lifetime = var.enable_sticky_sessions ? 3600 : null
-    certificates    = [hcloud_managed_certificate.main[0].id]
+    certificates    = var.enable_load_balancer ? [hcloud_managed_certificate.main[0].id] : []
   }
 }
 
@@ -130,53 +166,9 @@ resource "hcloud_managed_certificate" "main" {
   }
 }
 
-# OR if you want to use uploaded certificates instead:
-# resource "hcloud_uploaded_certificate" "main" {
-#   name        = "turbogate-cert-${var.environment}"
-#   certificate = file("${path.module}/certs/fullchain.pem")
-#   private_key = file("${path.module}/certs/privkey.pem")
-#   
-#   labels = {
-#     app         = "turbogate"
-#     environment = var.environment
-#   }
-# }
-
 # Algorithm configuration (conditional)
 resource "hcloud_load_balancer_algorithm" "main" {
   count             = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
   type             = var.load_balancer_algorithm
-}
-
-# Firewall for Load Balancer (conditional)
-resource "hcloud_firewall" "load_balancer" {
-  count = var.enable_load_balancer ? 1 : 0
-  name  = "turbogate-lb-fw-${var.environment}"
-  
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "80"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-  
-  rule {
-    direction  = "in"
-    protocol   = "tcp"
-    port       = "443"
-    source_ips = ["0.0.0.0/0", "::/0"]
-  }
-  
-  labels = {
-    purpose     = "load-balancer"
-    environment = var.environment
-  }
-}
-
-# Attach Firewall to Load Balancer (conditional)
-resource "hcloud_firewall_attachment" "load_balancer" {
-  count       = var.enable_load_balancer ? 1 : 0
-  firewall_id = hcloud_firewall.load_balancer[0].id
-  resources   = [hcloud_load_balancer.main[0].id]
 }
