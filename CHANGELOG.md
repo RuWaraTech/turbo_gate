@@ -1,3 +1,9 @@
+## v0.9.1 (2025-08-31)
+
+### fix
+
+- invalid path was used Invalid value for "path" parameter: no file exists at │ "./scripts/node_init.sh"
+
 ## v0.9.0 (2025-08-31)
 
 ### feat
