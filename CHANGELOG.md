@@ -1,3 +1,9 @@
+## v0.9.10 (2025-08-31)
+
+### fix
+
+- check fail ban installtiioon & is active
+
 ## v0.9.9 (2025-08-31)
 
 ### fix
