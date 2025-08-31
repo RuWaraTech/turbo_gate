@@ -1,5 +1,15 @@
-# Hetzner Load Balancer Configuration with PROXY Protocol Support
-# SSL termination handled by NGINX with Certbot certificates
+# Hetzner Managed Certificate
+resource "hcloud_managed_certificate" "main" {
+  count        = var.enable_load_balancer && var.ssl_certificate_type == "managed" ? 1 : 0
+  name         = "turbogate-cert-${var.environment}"
+  domain_names = [var.domain_name, "www.${var.domain_name}"]
+  
+  labels = {
+    app         = "turbogate"
+    environment = var.environment
+    managed_by  = "terraform"
+  }
+}
 
 # Firewall for Load Balancer
 resource "hcloud_firewall" "load_balancer" {
@@ -39,10 +49,10 @@ resource "hcloud_load_balancer" "main" {
   }
   
   labels = {
-    app         = "turbogate"
-    environment = var.environment
-    managed_by  = "terraform"
-    waf_enabled = var.waf_enabled ? "true" : "false"
+    app             = "turbogate"
+    environment     = var.environment
+    managed_by      = "terraform"
+    ssl_termination = "enabled"
   }
   
   delete_protection = var.environment == "prod" ? true : false
@@ -53,14 +63,14 @@ resource "hcloud_load_balancer_network" "main" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
   network_id       = hcloud_network.main.id
-  ip               = "10.0.4.10"  # Fixed IP in monitoring subnet
+  ip               = "10.0.4.10"
   
   depends_on = [
     hcloud_network_subnet.monitoring
   ]
 }
 
-# Target all nodes for NGINX global deployment
+# Target all nodes for direct HTTP backend communication
 resource "hcloud_load_balancer_target" "all_nodes" {
   count            = var.enable_load_balancer ? (1 + var.worker_count) : 0
   type             = "server"
@@ -73,42 +83,66 @@ resource "hcloud_load_balancer_target" "all_nodes" {
   ]
 }
 
-# HTTP Service (redirects to HTTPS)
-resource "hcloud_load_balancer_service" "http" {
+# HTTP Service (redirects to HTTPS at LB level)
+resource "hcloud_load_balancer_service" "http_redirect" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
-  protocol         = "tcp"  # TCP for PROXY protocol
+  protocol         = "http"
   listen_port      = 80
   destination_port = 80
-  proxyprotocol    = var.enable_proxy_protocol
+  
+  http {
+    redirect_http   = true  # Automatic HTTP to HTTPS redirect at LB
+    sticky_sessions = var.enable_sticky_sessions
+    cookie_name     = "HCLBSTICKY"
+    cookie_lifetime = 3600
+  }
   
   health_check {
-    protocol = "tcp"  # TCP health check for TCP service
+    protocol = "http"
     port     = 80
     interval = var.health_check_interval
     timeout  = var.health_check_timeout
     retries  = var.health_check_retries
+
+    http {
+      path = "/health"
+    }
   }
 }
 
-# HTTPS Service (main traffic with PROXY protocol)
+# HTTPS Service with SSL termination at LB
 resource "hcloud_load_balancer_service" "https" {
   count            = var.enable_load_balancer ? 1 : 0
   load_balancer_id = hcloud_load_balancer.main[0].id
-  protocol         = "tcp"  # TCP for PROXY protocol
+  protocol         = "https"
   listen_port      = 443
-  destination_port = 443
-  proxyprotocol    = var.enable_proxy_protocol
+  destination_port = 80  # Backend servers listen on HTTP only
+  
+  http {
+    sticky_sessions = var.enable_sticky_sessions
+    cookie_name     = "HCLBSTICKY"
+    cookie_lifetime = 3600
+  }
+
+  proxyprotocol = true  # Forward client connection details to backend
   
   health_check {
-    protocol = "tcp"  # TCP health check for TCP service
-    port     = 443
+    protocol = "http"
+    port     = 80
     interval = var.health_check_interval
     timeout  = var.health_check_timeout
     retries  = var.health_check_retries
+
+    http {
+      path = "/health"
+    }
   }
 }
 
-# Certificate management is handled by Certbot on the servers
-# SSL termination happens at NGINX, not at the load balancer
-# This eliminates certificate conflicts with Hetzner managed certificates
+# Attach managed certificate to HTTPS service
+resource "hcloud_load_balancer_service_certificate" "main" {
+  count                   = var.enable_load_balancer && var.ssl_certificate_type == "managed" ? 1 : 0
+  load_balancer_service_id = hcloud_load_balancer_service.https[0].id
+  certificate_id          = hcloud_managed_certificate.main[0].id
+}

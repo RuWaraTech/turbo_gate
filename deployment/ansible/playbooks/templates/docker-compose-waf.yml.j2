@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  # NGINX with OWASP ModSecurity WAF - Global deployment
+  # NGINX with WAF - Backend mode (receives HTTP from LB)
   nginx-waf:
     image: owasp/modsecurity:3-nginx-alpine
     deploy:
-      mode: global  # Runs on EVERY node for true HA
+      mode: global  # Runs on EVERY node for HA
       placement:
         constraints:
           - node.labels.waf_enabled == true
@@ -30,17 +30,13 @@ services:
       - target: 80
         published: 80
         protocol: tcp
-        mode: host  # Host mode preserves client IPs with PROXY protocol
-      - target: 443
-        published: 443
-        protocol: tcp
-        mode: host  # Host mode preserves client IPs with PROXY protocol
+        mode: host  # Backend HTTP only
       - target: 8080
         published: 8080
         protocol: tcp
         mode: ingress  # Health check port
     configs:
-      - source: nginx_waf_config
+      - source: nginx_backend_config
         target: /etc/nginx/nginx.conf
         mode: 0444
       - source: modsecurity_config
@@ -50,13 +46,10 @@ services:
         target: /etc/nginx/modsecurity/main.conf
         mode: 0444
     volumes:
-      # Mount SSL certificates as read-only on ALL nodes
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-      - /var/www/certbot:/var/www/certbot:ro
-      # Per-node log directories
+      # No SSL certificates needed - LB handles SSL
       - /var/log/nginx/waf:/var/log/nginx
       - /var/cache/nginx:/var/cache/nginx
-      # ModSecurity specific volumes
+      # ModSecurity volumes
       - modsec_tmp:/var/modsecurity/tmp
       - modsec_data:/var/modsecurity/data
     networks:
@@ -67,14 +60,14 @@ services:
       - ANOMALY_INBOUND={{ waf_anomaly_inbound | default(10) }}
       - ANOMALY_OUTBOUND={{ waf_anomaly_outbound | default(8) }}
       - BACKEND_SERVICE=turbogate_turbogate:5000
-      - PROXY_PROTOCOL={{ enable_proxy_protocol | default(true) | lower }}
+      - SSL_TERMINATION=load_balancer
       - DOMAIN_NAME={{ domain_name }}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/waf-health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 45s
+      start_period: 30s  # Faster startup since no SSL cert loading
     tmpfs:
       - /tmp:uid=101,gid=101,mode=755
       - /run:uid=101,gid=101,mode=755
@@ -128,8 +121,10 @@ services:
       - DOMAIN_NAME={{ domain_name }}
       - VERSION={{ version | default('unknown') }}
       - TRUSTED_PROXIES=10.0.0.0/16,172.16.0.0/12
-      - REAL_IP_HEADER=X-Real-IP
+      - REAL_IP_HEADER=X-Forwarded-For
       - FORWARDED_FOR_HEADER=X-Forwarded-For
+      - SSL_TERMINATED_AT=load_balancer  # App knows SSL is handled upstream
+      - SECURE_COOKIES=true  # Enable secure cookies even though backend is HTTP
     secrets:
       - source: turbogate_secret_key
         target: SECRET_KEY
@@ -228,7 +223,7 @@ networks:
     name: turbogate_database
 
 configs:
-  nginx_waf_config:
+  nginx_backend_config:  # Changed from nginx_waf_config
     external: true
   modsecurity_config:
     external: true

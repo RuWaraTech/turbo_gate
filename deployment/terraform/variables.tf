@@ -198,7 +198,7 @@ variable "enable_ssl_redirect" {
 variable "ssl_certificate_type" {
   description = "Type of SSL certificate (certbot, managed, or uploaded)"
   type        = string
-  default     = "certbot"  # CHANGED from "managed" to "certbot"
+  default     = "managed"  # CHANGED from "managed" to "certbot"
   
   validation {
     condition     = contains(["certbot", "managed", "uploaded"], var.ssl_certificate_type)

@@ -90,14 +90,6 @@ resource "hcloud_firewall" "waf" {
     description = "HTTP from Load Balancer"
   }
 
-  # Allow HTTPS from Load Balancer only (via private network)
-  rule {
-    direction   = "in"
-    protocol    = "tcp"
-    port        = "443"
-    source_ips  = ["10.0.4.0/24"]  # Monitoring subnet (where LB is)
-    description = "HTTPS from Load Balancer"
-  }
 
   # Health check port for WAF monitoring
   rule {
@@ -106,6 +98,14 @@ resource "hcloud_firewall" "waf" {
     port        = "8080"
     source_ips  = ["10.0.0.0/16"]
     description = "WAF health checks"
+  }
+
+  rule {
+    direction   = "in"
+    protocol    = "tcp"
+    port        = "8080"
+    source_ips  = ["10.0.4.10/32"]
+    description = "LB health checks"
   }
 
   labels = {

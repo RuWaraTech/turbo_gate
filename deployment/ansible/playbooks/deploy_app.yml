@@ -1,11 +1,11 @@
 ---
-- name: Deploy TurboGate with OWASP ModSecurity WAF (Global Mode)
+- name: Deploy TurboGate with Load Balancer SSL Termination
   hosts: swarm_managers
   become: yes
   
   vars:
     stack_name: turbogate
-    compose_file: /opt/turbogate/docker-compose-waf.yml
+    compose_file: /opt/turbogate/docker-compose-lb-ssl.yml
     health_check_timeout: 120
     deployment_timeout: 600
     
@@ -17,35 +17,20 @@
           - redis_password is defined
           - domain_name is defined
           - image_tag is defined
-        fail_msg: "Required variables (secret_key, redis_password, domain_name, image_tag) must be defined"
+          - ssl_certificate_type == "managed"  # Ensure managed certs for LB
+        fail_msg: "Required variables must be defined and ssl_certificate_type must be 'managed' for LB SSL termination"
 
-    - name: Run SSL certificate synchronization first
-      ansible.builtin.include: setup_ssl_sync.yml
-      vars:
-        admin_email: "{{ admin_email | default('admin@' + domain_name) }}"
-
-    - name: Verify SSL certificates exist on ALL nodes
-      ansible.builtin.shell: |
-        MISSING_NODES=""
-        for node in $(docker node ls --format '{{.Hostname}}'); do
-          if [ "$node" = "$(hostname)" ]; then
-            if [ ! -f "/etc/letsencrypt/live/{{ domain_name }}/fullchain.pem" ]; then
-              MISSING_NODES="$MISSING_NODES $node"
-            fi
-          else
-            NODE_IP=$(docker node inspect $node --format '{{.Status.Addr}}')
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$NODE_IP \
-              "test -f /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem" || \
-              MISSING_NODES="$MISSING_NODES $node"
-          fi
-        done
-        
-        if [ -n "$MISSING_NODES" ]; then
-          echo "ERROR: SSL certificates missing on nodes:$MISSING_NODES"
-          exit 1
-        fi
-        echo "✓ SSL certificates verified on all nodes"
-      register: ssl_verification
+    - name: Verify Load Balancer SSL certificate is ready
+      ansible.builtin.uri:
+        url: "https://{{ domain_name }}/health"
+        method: GET
+        timeout: 10
+        validate_certs: yes
+        status_code: [200, 502, 503]  # Allow backend errors while checking SSL
+      register: lb_ssl_check
+      retries: 10
+      delay: 30
+      until: lb_ssl_check.status != -1  # Any response means SSL is working
 
     - name: Create required directories
       ansible.builtin.file:
@@ -63,9 +48,6 @@
 
     - name: Create Docker secrets
       ansible.builtin.shell: |
-        # Create versioned secrets
-        VERSION="{{ ansible_date_time.epoch }}"
-        
         # Remove old secrets if they exist
         docker secret ls --format '{{.Name}}' | grep -E '^(turbogate_secret_key|redis_password)' | \
           xargs -r docker secret rm 2>/dev/null || true
@@ -121,6 +103,10 @@
         SecRule REQUEST_URI "@beginsWith /lb-health" \
             "id:1002,phase:1,pass,nolog,ctl:ruleEngine=Off"
         
+        # Trust Load Balancer headers
+        SecRule REQUEST_HEADERS:X-Forwarded-Proto "@streq https" \
+            "id:1003,phase:1,pass,nolog,setvar:tx.lb_ssl_terminated=1"
+        
         # Set paranoia level
         SecAction \
             "id:900000,phase:1,nolog,pass,t:none,\
@@ -133,25 +119,25 @@
             setvar:tx.outbound_anomaly_score_threshold={{ waf_anomaly_outbound | default(8) }}"
         EOF
 
-    - name: Create NGINX WAF configuration
+    - name: Create backend NGINX configuration (no SSL)
       ansible.builtin.template:
-        src: nginx-waf.conf.j2
-        dest: /tmp/nginx-waf.conf
+        src: nginx-backend.conf.j2
+        dest: /tmp/nginx-backend.conf
         mode: '0644'
 
-    - name: Create NGINX Docker config
+    - name: Create NGINX backend Docker config
       ansible.builtin.shell: |
-        docker config rm nginx_waf_config 2>/dev/null || true
-        docker config create nginx_waf_config /tmp/nginx-waf.conf
-        rm -f /tmp/nginx-waf.conf
+        docker config rm nginx_backend_config 2>/dev/null || true
+        docker config create nginx_backend_config /tmp/nginx-backend.conf
+        rm -f /tmp/nginx-backend.conf
 
-    - name: Label all nodes for WAF deployment
+    - name: Label all nodes for backend WAF deployment
       community.docker.docker_node:
         hostname: "{{ item }}"
         labels:
           waf_enabled: "true"
-          ssl_synced: "true"
-          security_hardened: "true"
+          ssl_termination: "load_balancer"
+          backend_mode: "true"
       delegate_to: "{{ inventory_hostname }}"
       with_items: "{{ groups['all'] | map('extract', hostvars, 'ansible_hostname') | list }}"
 
@@ -167,9 +153,9 @@
         - turbogate_backend
         - turbogate_database
 
-    - name: Create Docker Compose file for WAF
+    - name: Create Docker Compose file for LB SSL termination
       ansible.builtin.template:
-        src: docker-compose-waf.yml.j2
+        src: docker-compose-lb-ssl.yml.j2
         dest: "{{ compose_file }}"
         owner: root
         group: root
@@ -181,7 +167,7 @@
       register: existing_stacks
       changed_when: false
 
-    - name: Deploy stack with OWASP WAF
+    - name: Deploy stack with Load Balancer SSL termination
       community.docker.docker_stack:
         name: "{{ stack_name }}"
         compose:
@@ -194,10 +180,10 @@
       ansible.builtin.pause:
         seconds: 30
 
-    - name: Verify global NGINX WAF deployment
+    - name: Verify global NGINX backend deployment
       ansible.builtin.shell: |
         EXPECTED_NODES=$(docker node ls -q | wc -l)
-        echo "Expecting nginx-waf on $EXPECTED_NODES nodes..."
+        echo "Expecting nginx-waf on $EXPECTED_NODES nodes (backend mode)..."
         
         for i in {1..30}; do
           RUNNING=$(docker service ps {{ stack_name }}_nginx-waf \
@@ -205,26 +191,24 @@
           echo "Attempt $i: $RUNNING/$EXPECTED_NODES instances running"
           
           if [ "$RUNNING" -eq "$EXPECTED_NODES" ]; then
-            echo "✓ Global deployment successful"
+            echo "✓ Global backend deployment successful"
             exit 0
           fi
           sleep 10
         done
         
-        echo "Global deployment status:"
+        echo "Backend deployment status:"
         docker service ps {{ stack_name }}_nginx-waf --no-trunc
         exit 1
-      register: global_deployment_check
+      register: backend_deployment_check
       retries: 2
       delay: 30
-      until: global_deployment_check.rc == 0
+      until: backend_deployment_check.rc == 0
 
     - name: Verify application services
       ansible.builtin.shell: |
         for service in nginx-waf turbogate redis; do
           echo "Checking {{ stack_name }}_$service..."
-          DESIRED=$(docker service inspect {{ stack_name }}_$service \
-            --format '{{.Spec.Mode.Replicated.Replicas}}' 2>/dev/null || echo "1")
           RUNNING=$(docker service ls --filter name={{ stack_name }}_$service \
             --format '{{.Replicas}}' | cut -d'/' -f1)
           
@@ -232,88 +216,110 @@
             echo "ERROR: Service $service not running"
             exit 1
           fi
-          echo "✓ $service: $RUNNING instances running"
+          echo "✓ $service: $RUNNING instances running (backend mode)"
         done
       register: service_check
       retries: 5
       delay: 10
       until: service_check.rc == 0
 
-    - name: Test WAF on each node
+    - name: Test backend WAF on each node (HTTP only)
       ansible.builtin.shell: |
         for node in $(docker node ls --format '{{.Hostname}}'); do
           NODE_IP=$(docker node inspect $node --format '{{.Status.Addr}}')
-          echo "Testing WAF on $node ($NODE_IP)..."
+          echo "Testing backend WAF on $node ($NODE_IP)..."
           
-          # Test health endpoint
+          # Test health endpoint via HTTP (backend mode)
           if curl -sSf --max-time 10 "http://$NODE_IP:8080/waf-health" > /dev/null; then
-            echo "✓ WAF health check passed on $node"
+            echo "✓ Backend WAF health check passed on $node"
           else
-            echo "× WAF health check failed on $node"
+            echo "✗ Backend WAF health check failed on $node"
             exit 1
           fi
         done
-      register: waf_test
+      register: backend_waf_test
       retries: 3
       delay: 10
-      until: waf_test.rc == 0
+      until: backend_waf_test.rc == 0
 
-    - name: Verify HTTPS endpoint
+    - name: Wait for Load Balancer SSL certificate to be ready
+      ansible.builtin.pause:
+        seconds: 60
+        prompt: "Waiting for Load Balancer SSL certificate to provision..."
+
+    - name: Verify HTTPS endpoint via Load Balancer
       ansible.builtin.uri:
         url: "https://{{ domain_name }}/health"
         method: GET
         status_code: 200
         timeout: 15
         validate_certs: yes
-      register: https_health
-      retries: 5
-      delay: 10
-      until: https_health.status == 200
+      register: lb_https_health
+      retries: 10
+      delay: 15
+      until: lb_https_health.status == 200
 
-    - name: Test WAF protection
+    - name: Test Load Balancer to Backend flow
       ansible.builtin.shell: |
-        # Test SQL injection (should be blocked)
+        # Test that HTTPS at LB level reaches HTTP backends
+        RESPONSE=$(curl -s -H "X-Test-Backend: true" \
+          "https://{{ domain_name }}/waf-health")
+        
+        if echo "$RESPONSE" | grep -q "SSL: Terminated at Load Balancer"; then
+          echo "✓ Load Balancer SSL termination working correctly"
+        else
+          echo "⚠ SSL termination flow may need verification"
+          echo "Response: $RESPONSE"
+        fi
+
+    - name: Test WAF protection via Load Balancer
+      ansible.builtin.shell: |
+        # Test SQL injection (should be blocked by backend WAF)
         RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
           "https://{{ domain_name }}/?id=1' OR '1'='1" || true)
         
         if [ "$RESPONSE" = "403" ]; then
-          echo "✓ WAF is blocking SQL injection attempts"
+          echo "✓ Backend WAF is blocking attacks via Load Balancer"
         else
-          echo "⚠ WAF may not be blocking properly (got HTTP $RESPONSE)"
+          echo "⚠ WAF protection may need verification (got HTTP $RESPONSE)"
         fi
 
-    - name: Setup automatic certificate renewal
-      ansible.builtin.cron:
-        name: "Certbot renewal with WAF reload"
-        minute: "0"
-        hour: "2"
-        day: "*/15"
-        job: |
-          /usr/bin/certbot renew --quiet && \
-          /usr/local/bin/sync-certificates.sh {{ domain_name }} && \
-          docker service update --force {{ stack_name }}_nginx-waf
-        state: present
+    - name: Verify SSL termination headers
+      ansible.builtin.shell: |
+        # Check that backend receives correct forwarded headers
+        HEADERS=$(curl -s -I "https://{{ domain_name }}/health" | grep -i "x-")
+        echo "Load Balancer headers being passed:"
+        echo "$HEADERS"
 
     - name: Display deployment summary
       ansible.builtin.debug:
         msg: |
-          ===== WAF DEPLOYMENT COMPLETE =====
+          ===== LOAD BALANCER SSL TERMINATION DEPLOYMENT COMPLETE =====
           Stack: {{ stack_name }}
           Domain: {{ domain_name }}
+          SSL Termination: Load Balancer (Hetzner Managed Certificate)
+          Backend Mode: HTTP only with WAF protection
           WAF Status: OWASP ModSecurity Active
           Paranoia Level: {{ waf_paranoia_level | default(2) }}
-          SSL: Certbot with auto-renewal
-          NGINX Mode: Global (all nodes)
+          
+          Architecture:
+          Internet -> HTTPS (LB) -> HTTP (Backend NGINX+WAF) -> App
           
           Services:
-          - nginx-waf: Global deployment on all nodes
+          - Load Balancer: SSL termination + health checks
+          - nginx-waf: Global HTTP backend with ModSecurity
           - turbogate: {{ app_replicas | default(3) }} replicas
           - redis: 1 replica
           
           Access URLs:
-          - Main: https://{{ domain_name }}
+          - Main: https://{{ domain_name }} (SSL at LB)
           - Health: https://{{ domain_name }}/health
-          - WAF Test: https://{{ domain_name }}/waf-test
+          - Backend Test: http://NODE_IP:8080/waf-health
+          
+          Certificate Management:
+          - Type: Hetzner Managed Certificate
+          - Renewal: Automatic by Hetzner
+          - Cost: Included with Load Balancer
           
           Monitor with:
           docker service logs {{ stack_name }}_nginx-waf --follow
