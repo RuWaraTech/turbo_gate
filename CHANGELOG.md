@@ -1,3 +1,9 @@
+## v0.9.9 (2025-08-31)
+
+### fix
+
+- from "'workers' in group_names" to "'swarm_workers' in group_names"
+
 ## v0.9.8 (2025-08-31)
 
 ### fix
