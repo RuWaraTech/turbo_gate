@@ -1,3 +1,9 @@
+## v0.8.1 (2025-08-31)
+
+### fix
+
+- resolve hcloud provider compatibility issues
+
 ## v0.8.0 (2025-08-31)
 
 ### feat
