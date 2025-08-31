@@ -22,7 +22,6 @@
           - netcat
           - jq
         state: present
-    
 
     - name: Check if Docker is already installed
       ansible.builtin.command: docker --version
@@ -193,7 +192,7 @@
           network_segment: "{{ 'management' if 'swarm_managers' in group_names else 'application' }}"
       delegate_to: "{{ groups['swarm_managers'][0] }}"
 
-    # Security verification tasks
+    # Security verification tasks - COMPREHENSIVE CHECKS FOR ALL NODES
     - name: Verify Docker daemon security configuration
       shell: |
         docker system info --format '{{ "{{" }}.SecurityOptions{{ "}}" }}' | grep -q "name=seccomp" && \
@@ -203,12 +202,56 @@
       changed_when: false
       when: "'swarm_managers' in group_names"
 
+    - name: Verify fail2ban is active on all nodes
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: started
+        enabled: yes
+      register: fail2ban_service_status
+
+    - name: Verify fail2ban SSH protection is working
+      ansible.builtin.command: fail2ban-client status sshd
+      register: fail2ban_ssh_status
+      changed_when: false
+      failed_when: false
+      ignore_errors: yes
+
+    - name: Verify SSH hardening configuration on all nodes
+      ansible.builtin.shell: |
+        grep -q "^PasswordAuthentication no" /etc/ssh/sshd_config && \
+        grep -q "^PermitRootLogin prohibit-password" /etc/ssh/sshd_config && \
+        grep -q "^X11Forwarding no" /etc/ssh/sshd_config
+      register: ssh_hardening_verify
+      failed_when: false
+
+    - name: Verify kernel hardening settings
+      ansible.builtin.shell: |
+        sysctl net.ipv4.ip_forward | grep -q "= 1" && \
+        sysctl net.ipv4.tcp_syncookies | grep -q "= 1"
+      register: kernel_hardening_verify
+      failed_when: false
+
+    - name: Display individual node security status
+      ansible.builtin.debug:
+        msg: |
+          NODE: {{ inventory_hostname }} ({{ ansible_default_ipv4.address }})
+          ----------------------------------
+          Fail2Ban Service: {{ 'RUNNING' if fail2ban_service_status is succeeded else 'FAILED' }}
+          Fail2Ban SSH Protection: {{ 'ACTIVE' if fail2ban_ssh_status is succeeded and 'Currently banned:' in fail2ban_ssh_status.stdout else 'INACTIVE' }}
+          SSH Hardening: {{ 'COMPLETE' if ssh_hardening_verify.rc == 0 else 'INCOMPLETE' }}
+          Kernel Hardening: {{ 'APPLIED' if kernel_hardening_verify.rc == 0 else 'MISSING' }}
+          IP Forwarding: {{ 'ENABLED' if ansible_ip_forwarding else 'DISABLED' }}
+      run_once: false
+
+    - name: Set node security status fact
+      ansible.builtin.set_fact:
+        node_secure: "{{ fail2ban_service_status is succeeded and ssh_hardening_verify.rc == 0 and kernel_hardening_verify.rc == 0 }}"
+
     - name: Display Docker security status
-      debug:
+      ansible.builtin.debug:
         msg: 
           - "Docker security features: {{ 'Enabled' if docker_security_check.rc == 0 else 'Needs attention' }}"
           - "Swarm encryption: {{ 'Enabled' if swarm_encryption_enabled else 'Disabled' }}"
-          - "Security hardening: {{ 'Applied' if security_enabled else 'Skipped' }}"
       when: "'swarm_managers' in group_names"
       run_once: true
 
@@ -224,35 +267,42 @@
       run_once: true
 
     - name: Display network encryption status
-      debug:
+      ansible.builtin.debug:
         msg: "Network {{ item.item }}: Encrypted={{ item.network.Options.encrypted | default('false') }}"
       loop: "{{ network_info.results }}"
-      when: item.network is defined
+      when: 
+        - "'swarm_managers' in group_names"
+        - item.network is defined
       run_once: true
 
-    # Security health check
-    - name: Final security verification
-      block:
-        - name: Check fail2ban status
-          command: systemctl is-active fail2ban
-          register: fail2ban_status
-          failed_when: false
-          changed_when: false
+    # Cluster-wide security summary
+    - name: Compile cluster security report
+      ansible.builtin.set_fact:
+        security_report: |
+          === CLUSTER SECURITY VALIDATION REPORT ===
+          Total Nodes: {{ groups['all'] | length }}
+          Secure Nodes: {{ groups['all'] | select('match', '.*') | map('extract', hostvars, ['node_secure']) | select('equalto', true) | list | length }}
+          Insecure Nodes: {{ groups['all'] | select('match', '.*') | map('extract', hostvars, ['node_secure']) | select('equalto', false) | list | length }}
 
-        - name: Check SSH hardening
-          shell: grep -q "PasswordAuthentication no" /etc/ssh/sshd_config
-          register: ssh_hardening_check
-          failed_when: false
-          changed_when: false
+          INSECURE NODES (need attention):
+          {% for host in groups['all'] %}
+          {% if not hostvars[host].node_secure | default(false) %}
+          - {{ host }} ({{ hostvars[host].ansible_default_ipv4.address }})
+          {% endif %}
+          {% endfor %}
+      run_once: true
+      delegate_to: localhost
 
-        - name: Security status summary
-          debug:
-            msg:
-              - "=== Security Status Summary ==="
-              - "fail2ban: {{ 'Active' if fail2ban_status.rc == 0 else 'Inactive' }}"
-              - "SSH hardening: {{ 'Applied' if ssh_hardening_check.rc == 0 else 'Not applied' }}"
-              - "Docker Swarm: {{ 'Secure' if docker_security_check.rc == 0 else 'Review needed' }}"
-              - "Encrypted networks: {{ swarm_networks.keys() | list | join(', ') }}"
+    - name: Display security report
+      ansible.builtin.debug:
+        msg: "{{ security_report }}"
+      run_once: true
+
+    - name: Fail if any nodes are insecure
+      ansible.builtin.fail:
+        msg: "CRITICAL: {{ groups['all'] | select('match', '.*') | map('extract', hostvars, ['node_secure']) | select('equalto', false) | list | length }} nodes failed security validation! Check the report above."
+      when: groups['all'] | select('match', '.*') | map('extract', hostvars, ['node_secure']) | select('equalto', false) | list | length > 0
+      run_once: true
 
     - name: Final cluster status
       ansible.builtin.command: docker system info --format '{{ '{{' }}.Swarm.Nodes{{ '}}' }} nodes in swarm'

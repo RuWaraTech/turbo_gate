@@ -204,7 +204,7 @@ resource "hcloud_server" "manager" {
     node_index          = 0
     manager_ip          = "10.0.1.10"
     worker_count        = var.worker_count
-    fail2ban_config     = var.fail2ban_config
+    fail2ban_config     = jsonencode(var.fail2ban_config)
     enable_hardening    = var.enable_security_hardening
     waf_enabled         = var.waf_enabled
   })
@@ -244,7 +244,7 @@ resource "hcloud_server" "worker" {
     node_index          = count.index + 1
     manager_ip          = "10.0.1.10"
     worker_count        = var.worker_count
-    fail2ban_config     = var.fail2ban_config
+    fail2ban_config     = jsonencode(var.fail2ban_config)
     enable_hardening    = var.enable_security_hardening
     waf_enabled         = var.waf_enabled
   })
