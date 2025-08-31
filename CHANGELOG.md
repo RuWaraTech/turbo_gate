@@ -1,3 +1,9 @@
+## v0.9.16 (2025-08-31)
+
+### fix
+
+- removing repeated checks
+
 ## v0.9.15 (2025-08-31)
 
 ### fix
