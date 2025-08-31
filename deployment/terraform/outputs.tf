@@ -11,8 +11,8 @@ output "worker_ips" {
 
 output "internal_network" {
   value = {
-    manager = hcloud_server.manager.network[0].ip
-    workers = [for s in hcloud_server.worker : s.network[0].ip]
+    manager = [for network in hcloud_server.manager.network : network.ip if network.network_id == hcloud_network.main.id][0]
+    workers = [for s in hcloud_server.worker : [for network in s.network : network.ip if network.network_id == hcloud_network.main.id][0]]
   }
   description = "Internal network IPs"
 }
@@ -42,9 +42,9 @@ output "certificate_domains" {
   description = "Domains covered by the managed certificate"
 }
 
-output "certificate_status" {
-  value       = var.enable_load_balancer ? hcloud_managed_certificate.main[0].status : "N/A"
-  description = "Status of the managed certificate"
+output "certificate_id" {
+  value       = var.enable_load_balancer ? hcloud_managed_certificate.main[0].id : "N/A"
+  description = "ID of the managed certificate"
 }
 
 # DNS Configuration Instructions

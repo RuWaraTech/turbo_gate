@@ -31,6 +31,7 @@ resource "hcloud_load_balancer" "main" {
   name               = "turbogate-lb-${var.environment}"
   load_balancer_type = var.load_balancer_type
   location           = var.location
+  algorithm_type     = var.load_balancer_algorithm
   
   labels = {
     app         = "turbogate"
@@ -39,17 +40,6 @@ resource "hcloud_load_balancer" "main" {
   }
   
   delete_protection = var.environment == "prod" ? true : false
-}
-
-# Attach Firewall to Load Balancer using apply_to
-resource "hcloud_firewall_apply_to" "load_balancer" {
-  count      = var.enable_load_balancer ? 1 : 0
-  firewall_id = hcloud_firewall.load_balancer[0].id
-  
-  apply_to {
-    type = "load_balancer"
-    load_balancer_id = hcloud_load_balancer.main[0].id
-  }
 }
 
 # Attach Load Balancer to the private network (conditional)
@@ -164,11 +154,4 @@ resource "hcloud_managed_certificate" "main" {
   lifecycle {
     create_before_destroy = true
   }
-}
-
-# Algorithm configuration (conditional)
-resource "hcloud_load_balancer_algorithm" "main" {
-  count             = var.enable_load_balancer ? 1 : 0
-  load_balancer_id = hcloud_load_balancer.main[0].id
-  type             = var.load_balancer_algorithm
 }

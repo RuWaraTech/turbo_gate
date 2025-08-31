@@ -141,11 +141,14 @@ resource "hcloud_server" "manager" {
   ssh_keys    = [hcloud_ssh_key.default.id]
   
   # Apply multiple firewalls for layered security
-  firewall_ids = [
-    hcloud_firewall.internal_web.id,
-    hcloud_firewall.ssh_access.id,
-    hcloud_firewall.docker_swarm_enhanced.id
-  ]
+  firewall_ids = concat(
+    [
+      hcloud_firewall.internal_web.id,
+      hcloud_firewall.ssh_access.id,
+      hcloud_firewall.docker_swarm_enhanced.id
+    ],
+    var.enable_load_balancer ? [hcloud_firewall.load_balancer[0].id] : []
+  )
   
   network {
     network_id = hcloud_network.main.id
@@ -210,11 +213,14 @@ resource "hcloud_server" "worker" {
   ssh_keys    = [hcloud_ssh_key.default.id]
   
   # Workers have more restrictive firewall setup (no direct web access)
-  firewall_ids = [
-    hcloud_firewall.ssh_access.id,        # SSH access
-    hcloud_firewall.internal_web.id,      # Add this for LB to reach workers
-    hcloud_firewall.docker_swarm_enhanced.id  # Docker Swarm only
-  ]
+  firewall_ids = concat(
+    [
+      hcloud_firewall.ssh_access.id,
+      hcloud_firewall.internal_web.id,
+      hcloud_firewall.docker_swarm_enhanced.id
+    ],
+    var.enable_load_balancer ? [hcloud_firewall.load_balancer[0].id] : []
+  )
   
   network {
     network_id = hcloud_network.main.id
