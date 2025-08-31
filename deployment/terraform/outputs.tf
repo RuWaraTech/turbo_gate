@@ -80,7 +80,10 @@ output "dns_configuration" {
   } : {
     instructions = "Load Balancer disabled - using direct server access"
     a_record     = "${var.domain_name} → ${hcloud_server.manager.ipv4_address}"
+    aaaa_record  = "N/A"
+    www_record   = "N/A"
     ssl_info     = "SSL managed on servers"
+    backend_note = "Backend servers handle HTTPS traffic directly"
   }
   description = "DNS configuration for Load Balancer SSL termination"
 }
@@ -158,6 +161,7 @@ output "estimated_monthly_cost" {
 
 # SSL Certificate Management Information
 output "ssl_certificate_management" {
+  # CORRECTED: Ensured both sides of the conditional have the same keys.
   value = var.enable_load_balancer ? {
     type             = "Hetzner Managed Certificate"
     termination_point = "Load Balancer"
@@ -172,12 +176,17 @@ output "ssl_certificate_management" {
     termination_point = "Backend servers"
     renewal          = "Manual/Certbot required"
     backend_protocol = "HTTPS"
+    domains          = null
+    cost             = "Varies"
+    validation       = "N/A"
+    certificate_id   = "N/A"
   }
   description = "SSL certificate management for Load Balancer termination"
 }
 
 # Load Balancer SSL Service Information
 output "load_balancer_ssl_info" {
+  # CORRECTED: Ensured both sides of the conditional have the same keys.
   value = var.enable_load_balancer ? {
     https_service_id   = hcloud_load_balancer_service.https[0].id
     certificate_id     = var.ssl_certificate_type == "managed" ? hcloud_managed_certificate.main[0].id : "N/A"
@@ -186,7 +195,12 @@ output "load_balancer_ssl_info" {
     sticky_sessions    = var.enable_sticky_sessions ? "Enabled" : "Disabled"
     health_check_path  = "/health"
   } : {
-    message = "Load Balancer SSL termination disabled"
+    https_service_id   = "N/A"
+    certificate_id     = "N/A"
+    backend_protocol   = "N/A"
+    ssl_algorithms     = "N/A"
+    sticky_sessions    = "N/A"
+    health_check_path  = "N/A"
   }
   description = "Load Balancer SSL termination service details"
 }
