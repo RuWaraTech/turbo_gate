@@ -1,3 +1,9 @@
+## v0.8.6 (2025-08-31)
+
+### fix
+
+- The inventory.tpl template needs to be adjusted to handle the dynamic worker count:
+
 ## v0.8.5 (2025-08-31)
 
 ### fix
