@@ -1,3 +1,9 @@
+## v0.9.8 (2025-08-31)
+
+### fix
+
+- targeting hosts: swarm_managers:swarm_workers & also allowing internal ssh
+
 ## v0.9.7 (2025-08-31)
 
 ### fix
