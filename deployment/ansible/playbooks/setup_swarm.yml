@@ -78,7 +78,7 @@
       register: ping_test
       changed_when: false
       failed_when: false
-      when: "'workers' in group_names"
+      when: "'swarm_workers' in group_names" 
 
     - name: Initialize swarm on manager
       community.docker.docker_swarm:
@@ -115,7 +115,7 @@
       ansible.builtin.command: >
         timeout 30 bash -c 'until nc -z {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }} 2377; do sleep 2; done'
       register: port_test
-      when: "'workers' in group_names"
+      when: "'swarm_workers' in group_names"
       failed_when: false
       changed_when: false
 
@@ -128,7 +128,7 @@
           - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
         timeout: 60
       when:
-        - "'workers' in group_names"
+        - "'swarm_workers' in group_names"
         - swarm_state.stdout == "inactive"
         - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined
       register: join_result
