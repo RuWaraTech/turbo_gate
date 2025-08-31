@@ -9,14 +9,14 @@ all:
           
     swarm_workers:
       hosts:
-        %{ for i, ip in worker_ips ~}
+%{ for i, ip in worker_ips ~}
         turbogate-worker-${i + 1}:
           ansible_host: ${ip}
           ansible_user: root
           internal_ip: ${worker_internals[i]}
-        %{ endfor ~}
+%{ endfor ~}
         
-    %{ if enable_load_balancer ~}
+%{ if enable_load_balancer ~}
     load_balancer:
       hosts:
         turbogate-lb:
@@ -24,7 +24,7 @@ all:
           ansible_user: root
           internal_ip: ${load_balancer_internal}
           ipv6_address: ${load_balancer_ipv6}
-    %{ endif ~}
+%{ endif ~}
       
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
@@ -32,13 +32,13 @@ all:
     
     # Load Balancer configuration
     load_balancer_enabled: ${enable_load_balancer}
-    %{ if enable_load_balancer ~}
+%{ if enable_load_balancer ~}
     load_balancer_ip: ${load_balancer_ip}
     load_balancer_ipv6: ${load_balancer_ipv6}
-    %{ else ~}
+%{ else ~}
     load_balancer_ip: ""
     load_balancer_ipv6: ""
-    %{ endif ~}
+%{ endif ~}
     
     # WAF configuration
     waf_enabled: ${waf_enabled}
