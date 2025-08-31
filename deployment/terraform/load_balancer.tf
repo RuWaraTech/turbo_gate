@@ -31,7 +31,9 @@ resource "hcloud_load_balancer" "main" {
   name               = "turbogate-lb-${var.environment}"
   load_balancer_type = var.load_balancer_type
   location           = var.location
-  algorithm_type     = var.load_balancer_algorithm
+  algorithm {
+    type = var.load_balancer_algorithm
+  }
   
   labels = {
     app         = "turbogate"
