@@ -351,7 +351,8 @@ jobs:
             echo "Running SSL sync setup..."
             ansible-playbook -i inventory/production.yml playbooks/setup_ssl_sync.yml \
               -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
-              -e "admin_email=${{ secrets.ADMIN_EMAIL }}"
+              -e "admin_email=${{ secrets.ADMIN_EMAIL }}" \
+              -vvv
           else
             echo "SSL certificates already synced"
           fi
