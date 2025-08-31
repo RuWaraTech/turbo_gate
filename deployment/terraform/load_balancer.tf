@@ -1,4 +1,5 @@
 # Hetzner Load Balancer Configuration with PROXY Protocol Support
+# SSL termination handled by NGINX with Certbot certificates
 
 # Firewall for Load Balancer
 resource "hcloud_firewall" "load_balancer" {
@@ -82,12 +83,11 @@ resource "hcloud_load_balancer_service" "http" {
   proxyprotocol    = var.enable_proxy_protocol
   
   health_check {
-    protocol = "tcp"  # CHANGED: TCP health check for TCP service
+    protocol = "tcp"  # TCP health check for TCP service
     port     = 80
     interval = var.health_check_interval
     timeout  = var.health_check_timeout
     retries  = var.health_check_retries
-    # REMOVED: http block (not compatible with TCP protocol)
   }
 }
 
@@ -101,32 +101,14 @@ resource "hcloud_load_balancer_service" "https" {
   proxyprotocol    = var.enable_proxy_protocol
   
   health_check {
-    protocol = "tcp"  # CHANGED: TCP health check for TCP service
+    protocol = "tcp"  # TCP health check for TCP service
     port     = 443
     interval = var.health_check_interval
     timeout  = var.health_check_timeout
     retries  = var.health_check_retries
-    # REMOVED: http block (not compatible with TCP protocol)
   }
 }
 
-# Managed Certificate with unique name
-resource "hcloud_managed_certificate" "main" {
-  count        = var.enable_load_balancer && var.ssl_certificate_type == "managed" ? 1 : 0
-  name         = "turbogate-cert-${var.environment}-${formatdate("YYYYMMDD-HHmm", timestamp())}"  # CHANGED: Added timestamp for uniqueness
-  domain_names = length(var.ssl_domains) > 0 ? var.ssl_domains : [var.domain_name, "www.${var.domain_name}"]
-  
-  labels = {
-    app         = "turbogate"
-    environment = var.environment
-  }
-  
-  lifecycle {
-    create_before_destroy = true
-    ignore_changes = [name]  # ADDED: Prevent recreation on timestamp changes
-  }
-}
-
-# Note: Since we're using TCP mode with PROXY protocol,
-# SSL termination happens at NGINX, not at the load balancer.
-# The certificate resource above is for reference/future use.
+# Certificate management is handled by Certbot on the servers
+# SSL termination happens at NGINX, not at the load balancer
+# This eliminates certificate conflicts with Hetzner managed certificates

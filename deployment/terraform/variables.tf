@@ -188,26 +188,26 @@ variable "waf_rule_engine" {
   }
 }
 
-# SSL Configuration
+# SSL Configuration - UPDATED for Certbot certificates
 variable "enable_ssl_redirect" {
-  description = "Enable automatic HTTP to HTTPS redirect at load balancer"
+  description = "Enable automatic HTTP to HTTPS redirect at NGINX level"
   type        = bool
   default     = true
 }
 
 variable "ssl_certificate_type" {
-  description = "Type of SSL certificate (managed or uploaded)"
+  description = "Type of SSL certificate (certbot, managed, or uploaded)"
   type        = string
-  default     = "managed"
+  default     = "certbot"  # CHANGED from "managed" to "certbot"
   
   validation {
-    condition     = contains(["managed", "uploaded"], var.ssl_certificate_type)
-    error_message = "Certificate type must be either 'managed' or 'uploaded'"
+    condition     = contains(["certbot", "managed", "uploaded"], var.ssl_certificate_type)
+    error_message = "Certificate type must be one of: 'certbot', 'managed', or 'uploaded'"
   }
 }
 
 variable "ssl_domains" {
-  description = "Domains for SSL certificate"
+  description = "Domains for SSL certificate (used for reference only with Certbot)"
   type        = list(string)
   default     = []
 }
