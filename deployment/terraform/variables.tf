@@ -42,7 +42,7 @@ variable "environment" {
 variable "worker_count" {
   description = "Number of worker nodes to create"
   type        = number
-  default     = 5
+  default     = 3
   
   validation {
     condition     = var.worker_count >= 1 && var.worker_count <= 10
