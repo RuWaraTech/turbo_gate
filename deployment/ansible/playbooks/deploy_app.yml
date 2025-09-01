@@ -29,7 +29,7 @@
       delay: 30
       until: lb_ssl_check.status != -1
 
-    - name: Create required directories on manager
+    - name: Create required directories on manager node
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
@@ -41,173 +41,99 @@
         - /var/log/turbogate
         - /var/lib/turbogate/redis
 
-    # IMPROVED: Better directory creation on all swarm nodes
-    - name: Get list of all swarm nodes
-      ansible.builtin.shell: |
-        docker node ls --format '{{ "{{" }}.Hostname{{ "}}" }}' | grep -v "^$"
-      register: swarm_nodes
+    # ===================================================================
+    # BEGIN: RELIABLE DIRECTORY CREATION ON ALL SWARM NODES
+    # ===================================================================
+    - name: Get the list of all swarm node hostnames
+      ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}'
+      register: swarm_node_hostnames
       changed_when: false
+      run_once: true # This command only needs to run on the manager
 
-    - name: Create required directories on all swarm nodes
-      block:
-        - name: Create directories on manager node
-          ansible.builtin.file:
-            path: "{{ item }}"
-            state: directory
-            owner: root
-            group: root
-            mode: '0755'
-          loop:
-            - /var/log/nginx/waf
-            - /var/cache/nginx
+    - name: Create NGINX directories on ALL swarm nodes directly
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/log/nginx/waf
+        - /var/cache/nginx
+      delegate_to: "{{ node_hostname }}"
+      loop_control:
+        loop_var: node_hostname
+      with_items: "{{ swarm_node_hostnames.stdout_lines }}"
+      vars:
+        # Ensures Ansible connects to the worker nodes with the correct credentials
+        ansible_user: "{{ ansible_user | default(lookup('env', 'USER')) }}"
+    # ===================================================================
+    # END: RELIABLE DIRECTORY CREATION
+    # ===================================================================
 
-        - name: Create directories on worker nodes using simple approach
-          ansible.builtin.shell: |
-            # Get worker node hostnames (excluding manager)
-            docker node ls --format '{{ "{{" }}.Hostname{{ "}}" }}' | grep -v "$(hostname)" | while read worker_hostname; do
-              echo "Creating directories on worker: $worker_hostname"
-              # Use SSH to create directories (assuming SSH access is configured)
-              ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $worker_hostname \
-                "sudo mkdir -p /var/log/nginx/waf /var/cache/nginx && sudo chmod 755 /var/log/nginx/waf /var/cache/nginx" || \
-                echo "Warning: Could not create directories on $worker_hostname"
-            done
-          register: worker_dir_create
-          failed_when: false
-          ignore_errors: yes
-          when: swarm_nodes.stdout_lines | length > 1  # Only run if there are worker nodes
-
-    - name: Pre-pull nginx-waf image on all nodes
-      ansible.builtin.shell: |
-        # Pull on manager first
-        docker pull owasp/modsecurity-crs:nginx-alpine
-        
-        # Create a temporary global service to pull image on all nodes
-        docker service create \
-          --name temp-image-puller \
-          --mode global \
-          --restart-condition none \
-          owasp/modsecurity-crs:nginx-alpine \
-          echo "Image pulled on $(hostname)"
-        
-        # Wait for it to complete then clean up
-        sleep 30
-        docker service rm temp-image-puller
-      register: pull_images
-      failed_when: false
-
-    # Alternative approach: Use init containers or named volumes
-    - name: Create nginx log volume if using named volumes
-      ansible.builtin.shell: "docker volume create nginx_waf_logs || true"
-      when: use_named_volumes | default(false)
+    - name: Pre-pull required images on all nodes
+      ansible.builtin.command: docker image pull {{ item }}
+      delegate_to: "{{ node_hostname }}"
+      loop_control:
+        loop_var: node_hostname
+      with_items: "{{ swarm_node_hostnames.stdout_lines }}"
+      loop:
+        - owasp/modsecurity-crs:nginx-alpine
+        - "{{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag | default('latest') }}"
+        - redis:7-alpine
 
     # ===================================================================
     # BEGIN: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
     # ===================================================================
-
-    - name: Get current timestamp for versioning
+    - name: Get current timestamp for versioning resources
       ansible.builtin.set_fact:
         resource_version: "{{ ansible_date_time.epoch }}"
+      run_once: true
 
-    # Check if stack exists FIRST
-    - name: Check if stack exists
-      ansible.builtin.command: docker stack ls --format '{{ "{{" }}.Name{{ "}}" }}'
+    - name: Check if stack already exists
+      ansible.builtin.command: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}'
       register: existing_stacks
       changed_when: false
       failed_when: false
 
-    - name: Set stack exists fact
+    - name: Set fact for stack existence
       ansible.builtin.set_fact:
         stack_exists: "{{ stack_name in existing_stacks.stdout_lines }}"
 
     # --- SECRET MANAGEMENT ---
     - name: Create new versioned Docker secrets
-      ansible.builtin.shell: |
-        echo -n "{{ item.value }}" | docker secret create {{ item.name }}_v{{ resource_version }} -
+      ansible.builtin.shell:
+        cmd: "echo -n \"{{ item.value }}\" | docker secret create {{ item.name }}_v{{ resource_version }} -"
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
       no_log: true
+      when: stack_exists
 
-    # Only try to create unversioned secrets if stack doesn't exist
-    - name: Create unversioned secret aliases (new deployment only)
-      ansible.builtin.shell: |
-        echo -n "{{ item.value }}" | docker secret create {{ item.name }} -
-      loop:
-        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
-        - { name: "redis_password", value: "{{ redis_password }}" }
-      no_log: true
-      when: not stack_exists
-      failed_when: false
-      ignore_errors: yes
-      
     # --- CONFIG MANAGEMENT ---
-    - name: Create ModSecurity configuration content in a temporary file
-      ansible.builtin.copy:
-        dest: "/tmp/modsecurity_{{ resource_version }}.conf"
-        content: |
-          SecRuleEngine {{ waf_rule_engine | default('On') }}
-          SecRequestBodyAccess On
-          SecResponseBodyAccess On
-          SecResponseBodyMimeType text/plain text/html text/xml application/json
-          SecResponseBodyLimit 524288
-          SecResponseBodyLimitAction ProcessPartial
-          SecAuditEngine {{ waf_audit_engine | default('RelevantOnly') }}
-          SecAuditLogRelevantStatus "^(?:5|4(?!04))"
-          SecAuditLogParts ABDEFHIJZ
-          SecAuditLogType Serial
-          SecAuditLog /var/log/nginx/modsec_audit.log
-
-    - name: Create ModSecurity rules content in a temporary file
-      ansible.builtin.copy:
-        dest: "/tmp/modsecurity_rules_{{ resource_version }}.conf"
-        content: |
-          Include /etc/nginx/modsecurity/modsecurity.conf
-          Include /usr/local/owasp-modsecurity-crs/crs-setup.conf
-          Include /usr/local/owasp-modsecurity-crs/rules/*.conf
-          SecRule REQUEST_URI "@beginsWith /health" "id:1000,phase:1,pass,nolog,ctl:ruleEngine=Off"
-          SecRule REQUEST_URI "@beginsWith /waf-health" "id:1001,phase:1,pass,nolog,ctl:ruleEngine=Off"
-          SecRule REQUEST_URI "@beginsWith /lb-health" "id:1002,phase:1,pass,nolog,ctl:ruleEngine=Off"
-          SecAction "id:900000,phase:1,nolog,pass,t:none,setvar:tx.paranoia_level={{ waf_paranoia_level | default(2) }}"
-          SecAction "id:900001,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold={{ waf_anomaly_inbound | default(10) }},setvar:tx.outbound_anomaly_score_threshold={{ waf_anomaly_outbound | default(8) }}"
-
-    - name: Create backend NGINX config content from template
+    - name: Create versioned ModSecurity and NGINX configs from templates
       ansible.builtin.template:
-        src: nginx-waf.conf.j2
-        dest: "/tmp/nginx-waf_{{ resource_version }}.conf"
+        src: "{{ item.src }}"
+        dest: "/tmp/{{ item.dest }}_{{ resource_version }}"
         mode: '0644'
+      loop:
+        - { src: "templates/modsecurity.conf.j2", dest: "modsecurity.conf" }
+        - { src: "templates/modsecurity_rules.conf.j2", dest: "modsecurity_rules.conf" }
+        - { src: "templates/nginx-waf.conf.j2", dest: "nginx-waf.conf" }
 
-    - name: Create versioned configs
+    - name: Create versioned Docker configs
       ansible.builtin.command: docker config create {{ item.name }}_v{{ resource_version }} {{ item.path }}
       loop:
-        - { name: "modsecurity_config", path: "/tmp/modsecurity_{{ resource_version }}.conf" }
-        - { name: "modsecurity_rules", path: "/tmp/modsecurity_rules_{{ resource_version }}.conf" }
-        - { name: "nginx_backend_config", path: "/tmp/nginx-waf_{{ resource_version }}.conf" }
-
-    # Only create unversioned configs for new deployments
-    - name: Create unversioned config aliases (new deployment only)
-      ansible.builtin.command: docker config create {{ item.name }} {{ item.path }}
-      loop:
-        - { name: "modsecurity_config", path: "/tmp/modsecurity_{{ resource_version }}.conf" }
-        - { name: "modsecurity_rules", path: "/tmp/modsecurity_rules_{{ resource_version }}.conf" }
-        - { name: "nginx_backend_config", path: "/tmp/nginx-waf_{{ resource_version }}.conf" }
-      when: not stack_exists
-      failed_when: false
-      ignore_errors: yes
-    
-    - name: Clean up temporary config files
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - "/tmp/modsecurity_{{ resource_version }}.conf"
-        - "/tmp/modsecurity_rules_{{ resource_version }}.conf"
-        - "/tmp/nginx-waf_{{ resource_version }}.conf"
+        - { name: "modsecurity_config", path: "/tmp/modsecurity.conf_{{ resource_version }}" }
+        - { name: "modsecurity_rules", path: "/tmp/modsecurity_rules.conf_{{ resource_version }}" }
+        - { name: "nginx_backend_config", path: "/tmp/nginx-waf.conf_{{ resource_version }}" }
+      when: stack_exists
 
     # ===================================================================
     # END: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
     # ===================================================================
 
-    - name: Create overlay networks if not exist
+    - name: Create overlay networks if they do not exist
       community.docker.docker_network:
         name: "{{ item }}"
         driver: overlay
@@ -217,94 +143,83 @@
         - turbogate_backend
         - turbogate_database
 
-    - name: Create Docker Compose file from template
+    - name: Create Docker Compose file from template for deployment
       ansible.builtin.template:
         src: docker-compose-waf.yml.j2
         dest: "{{ compose_file }}"
         mode: '0644'
-        backup: yes
 
-    # Remove existing failing service before deployment
-    - name: Remove failing nginx-waf service if exists
-      ansible.builtin.shell: |
-        if docker service ls --filter name={{ stack_name }}_nginx-waf --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q .; then
-          echo "Removing existing failing nginx-waf service"
-          docker service rm {{ stack_name }}_nginx-waf || true
-          sleep 10
-        fi
-      register: remove_failing_service
-      failed_when: false
-
-    # Proper deployment strategy
-    - name: Deploy Docker stack (new deployment)
+    - name: Deploy or update the Docker stack
       community.docker.docker_stack:
         name: "{{ stack_name }}"
+        state: present
         compose:
           - "{{ compose_file }}"
-        state: present
-        prune: no  # Don't prune on updates
-      register: stack_deploy
-      when: not stack_exists
+        prune: yes
+        with_registry_auth: yes
 
-    # Rolling update for existing deployment
-    - name: Perform rolling update for existing stack
-      block:
-        - name: Update turbogate service with new secrets
-          ansible.builtin.shell: |
-            docker service update \
-              --secret-rm turbogate_secret_key \
-              --secret-add source=turbogate_secret_key_v{{ resource_version }},target=SECRET_KEY \
-              --secret-rm redis_password \
-              --secret-add source=redis_password_v{{ resource_version }},target=redis_password \
-              --update-parallelism 1 \
-              --update-delay 30s \
-              --update-order start-first \
-              {{ stack_name }}_turbogate
-          register: turbogate_update
-
-        - name: Update redis service with new password
-          ansible.builtin.shell: |
-            docker service update \
-              --secret-rm redis_password \
-              --secret-add source=redis_password_v{{ resource_version }},target=redis_password \
-              --update-parallelism 1 \
-              --update-delay 30s \
-              {{ stack_name }}_redis
-          register: redis_update
-
-        - name: Redeploy stack to fix nginx-waf issues
-          community.docker.docker_stack:
-            name: "{{ stack_name }}"
-            compose:
-              - "{{ compose_file }}"
-            state: present
-            prune: yes
-          register: stack_redeploy
-              
-      when: stack_exists
-
-    - name: Wait for services to stabilize
+    - name: Wait for services to stabilize after deployment
       ansible.builtin.pause:
         seconds: 45
 
+    # ===================================================================
+    # BEGIN: CLEANUP OF OLD RESOURCES
+    # ===================================================================
+    - name: Get list of old secrets to remove
+      ansible.builtin.shell: "docker secret ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
+      register: old_secrets
+      loop:
+        - { name: "turbogate_secret_key" }
+        - { name: "redis_password" }
+      changed_when: false
+      when: stack_exists
+
+    - name: Remove old versioned secrets
+      ansible.builtin.command: "docker secret rm {{ item }}"
+      loop: "{{ old_secrets.results | map(attribute='stdout_lines') | flatten }}"
+      when: stack_exists and old_secrets.results is defined
+
+    - name: Get list of old configs to remove
+      ansible.builtin.shell: "docker config ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
+      register: old_configs
+      loop:
+        - { name: "modsecurity_config" }
+        - { name: "modsecurity_rules" }
+        - { name: "nginx_backend_config" }
+      changed_when: false
+      when: stack_exists
+
+    - name: Remove old versioned configs
+      ansible.builtin.command: "docker config rm {{ item }}"
+      loop: "{{ old_configs.results | map(attribute='stdout_lines') | flatten }}"
+      when: stack_exists and old_configs.results is defined
+
+    - name: Clean up temporary config files from manager
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/modsecurity.conf_{{ resource_version }}"
+        - "/tmp/modsecurity_rules.conf_{{ resource_version }}"
+        - "/tmp/nginx-waf.conf_{{ resource_version }}"
+    # ===================================================================
+    # END: CLEANUP
+    # ===================================================================
+
     - name: Verify nginx-waf service is running properly
       ansible.builtin.shell: |
-        # Check nginx-waf service status
-        replicas=$(docker service ls --filter name={{ stack_name }}_nginx-waf --format '{{ "{{" }}.Replicas{{ "}}" }}')
+        replicas=$(docker service ls --filter name={{ stack_name }}_nginx-waf --format '{{ '{{' }}.Replicas{{ '}}' }}')
         if [ -z "$replicas" ]; then
           echo "ERROR: nginx-waf service not found"
           exit 1
         fi
-        
         running=$(echo $replicas | cut -d'/' -f1)
         desired=$(echo $replicas | cut -d'/' -f2)
-        
         if [ "$running" != "$desired" ] || [ "$running" -lt "1" ]; then
           echo "ERROR: nginx-waf service not running properly. Replicas: $replicas"
           docker service ps {{ stack_name }}_nginx-waf --no-trunc
           exit 1
         fi
-        
         echo "✅ nginx-waf service running with replicas: $replicas"
       register: nginx_service_check
       retries: 6
@@ -329,6 +244,5 @@
           ✅ DEPLOYMENT COMPLETE ✅
           Stack: {{ stack_name }}
           Domain: https://{{ domain_name }}
-          Access URL: https://{{ domain_name }}/health
           Resource Version: {{ resource_version }}
           Deployment Type: {{ 'New Deployment' if not stack_exists else 'Rolling Update' }}
