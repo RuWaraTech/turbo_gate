@@ -83,33 +83,7 @@ resource "hcloud_load_balancer_target" "all_nodes" {
   ]
 }
 
-# HTTP Service (redirects to HTTPS at LB level)
-resource "hcloud_load_balancer_service" "http_redirect" {
-  count            = var.enable_load_balancer ? 1 : 0
-  load_balancer_id = hcloud_load_balancer.main[0].id
-  protocol         = "http"
-  listen_port      = 80
-  destination_port = 80
-
-  http {
-    redirect_http   = true  # Automatic HTTP to HTTPS redirect at LB
-    sticky_sessions = var.enable_sticky_sessions
-    cookie_name     = "HCLBSTICKY"
-    cookie_lifetime = 3600
-  }
-
-  health_check {
-    protocol = "http"
-    port     = 80
-    interval = var.health_check_interval
-    timeout  = var.health_check_timeout
-    retries  = var.health_check_retries
-
-    http {
-      path = "/health"
-    }
-  }
-}
+# REMOVED: The http_redirect service is not needed.
 
 # HTTPS Service with SSL termination at LB
 resource "hcloud_load_balancer_service" "https" {
@@ -117,18 +91,18 @@ resource "hcloud_load_balancer_service" "https" {
   load_balancer_id = hcloud_load_balancer.main[0].id
   protocol         = "https"
   listen_port      = 443
-  destination_port = 80  # Backend servers listen on HTTP only
+  destination_port = 80 # Backend servers listen on HTTP only
 
   http {
-    # CORRECTED: Certificate is attached directly here
     certificates    = var.ssl_certificate_type == "managed" ? [hcloud_managed_certificate.main[0].id] : []
-    
     sticky_sessions = var.enable_sticky_sessions
     cookie_name     = "HCLBSTICKY"
     cookie_lifetime = 3600
+    # CORRECTED: This attribute on the HTTPS service handles the redirect.
+    redirect_http   = true
   }
 
-  proxyprotocol = true  # Forward client connection details to backend
+  proxyprotocol = true # Forward client connection details to backend
 
   health_check {
     protocol = "http"
@@ -143,4 +117,3 @@ resource "hcloud_load_balancer_service" "https" {
   }
 }
 
-# REMOVED: The hcloud_load_balancer_service_certificate resource block has been deleted.

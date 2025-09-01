@@ -241,3 +241,15 @@ variable "nginx_replicas" {
     error_message = "NGINX replicas must be between 1 and 10"
   }
 }
+
+variable "manage_dns" {
+  description = "Whether to manage DNS records in Hetzner"
+  type        = bool
+  default     = true
+}
+
+variable "domain_name" {
+  description = "The domain name for the application"
+  type        = string
+  default     = "ridebase.app"
+}
