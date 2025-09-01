@@ -1,3 +1,9 @@
+## v0.9.28 (2025-09-01)
+
+### fix
+
+- add  check on secret gettings passed
+
 ## v0.9.27 (2025-09-01)
 
 ### fix
