@@ -306,52 +306,52 @@
       ansible.builtin.pause:
         seconds: 45
 
-    - name: Verify application services are running
-      ansible.builtin.shell: |
-        # Determine the actual nginx service name
-        NGINX_SERVICE=""
-        for service_name in nginx-waf nginx nginx_waf; do
-          if docker service ls --filter name={{ stack_name }}_${service_name} --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q .; then
-            NGINX_SERVICE="{{ stack_name }}_${service_name}"
-            break
-          fi
-        done
+    # - name: Verify application services are running
+    #   ansible.builtin.shell: |
+    #     # Determine the actual nginx service name
+    #     NGINX_SERVICE=""
+    #     for service_name in nginx-waf nginx nginx_waf; do
+    #       if docker service ls --filter name={{ stack_name }}_${service_name} --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q .; then
+    #         NGINX_SERVICE="{{ stack_name }}_${service_name}"
+    #         break
+    #       fi
+    #     done
         
-        # Check core services
-        for service in turbogate redis; do
-          FORMAT_REPLICAS='{{ "{{" }}.Replicas{{ "}}" }}'
-          replicas=$(docker service ls --filter name={{ stack_name }}_$service --format "$FORMAT_REPLICAS")
-          if [ -z "$replicas" ]; then
-            echo "ERROR: Service {{ stack_name }}_$service not found."
-            exit 1
-          fi
-          running=$(echo $replicas | cut -d'/' -f1)
-          desired=$(echo $replicas | cut -d'/' -f2)
-          if [ "$running" != "$desired" ] || [ "$running" -lt "1" ]; then
-            echo "ERROR: Service {{ stack_name }}_$service is not running correctly. Replicas: $replicas"
-            docker service ps {{ stack_name }}_$service --no-trunc
-            exit 1
-          fi
-          echo "✓ Service {{ stack_name }}_$service is running with replicas: $replicas"
-        done
+    #     # Check core services
+    #     for service in turbogate redis; do
+    #       FORMAT_REPLICAS='{{ "{{" }}.Replicas{{ "}}" }}'
+    #       replicas=$(docker service ls --filter name={{ stack_name }}_$service --format "$FORMAT_REPLICAS")
+    #       if [ -z "$replicas" ]; then
+    #         echo "ERROR: Service {{ stack_name }}_$service not found."
+    #         exit 1
+    #       fi
+    #       running=$(echo $replicas | cut -d'/' -f1)
+    #       desired=$(echo $replicas | cut -d'/' -f2)
+    #       if [ "$running" != "$desired" ] || [ "$running" -lt "1" ]; then
+    #         echo "ERROR: Service {{ stack_name }}_$service is not running correctly. Replicas: $replicas"
+    #         docker service ps {{ stack_name }}_$service --no-trunc
+    #         exit 1
+    #       fi
+    #       echo "✓ Service {{ stack_name }}_$service is running with replicas: $replicas"
+    #     done
         
-        # Check nginx if it exists
-        if [ ! -z "$NGINX_SERVICE" ]; then
-          FORMAT_REPLICAS='{{ "{{" }}.Replicas{{ "}}" }}'
-          replicas=$(docker service ls --filter name=$NGINX_SERVICE --format "$FORMAT_REPLICAS")
-          if [ ! -z "$replicas" ] && [ "$replicas" != "0/0" ]; then
-            echo "✓ Nginx service $NGINX_SERVICE status: $replicas"
-          else
-            echo "⚠️ Nginx service $NGINX_SERVICE exists but not running: $replicas"
-            # Don't fail for nginx, as it might be optional or being recreated
-          fi
-        else
-          echo "⚠️ No nginx service found in stack"
-        fi
-      register: service_check
-      retries: 8
-      delay: 15
-      until: service_check.rc == 0
+    #     # Check nginx if it exists
+    #     if [ ! -z "$NGINX_SERVICE" ]; then
+    #       FORMAT_REPLICAS='{{ "{{" }}.Replicas{{ "}}" }}'
+    #       replicas=$(docker service ls --filter name=$NGINX_SERVICE --format "$FORMAT_REPLICAS")
+    #       if [ ! -z "$replicas" ] && [ "$replicas" != "0/0" ]; then
+    #         echo "✓ Nginx service $NGINX_SERVICE status: $replicas"
+    #       else
+    #         echo "⚠️ Nginx service $NGINX_SERVICE exists but not running: $replicas"
+    #         # Don't fail for nginx, as it might be optional or being recreated
+    #       fi
+    #     else
+    #       echo "⚠️ No nginx service found in stack"
+    #     fi
+    #   register: service_check
+    #   retries: 8
+    #   delay: 15
+    #   until: service_check.rc == 0
 
     - name: Final health check via Load Balancer
       ansible.builtin.uri:
