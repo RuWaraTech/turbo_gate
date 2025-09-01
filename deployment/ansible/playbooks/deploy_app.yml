@@ -52,35 +52,43 @@
 
     - name: Create NGINX directories on ALL swarm nodes directly
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ item.path }}"
         state: directory
         owner: root
         group: root
         mode: '0755'
-      loop:
-        - /var/log/nginx/waf
-        - /var/cache/nginx
-      delegate_to: "{{ node_hostname }}"
-      loop_control:
-        loop_var: node_hostname
-      with_items: "{{ swarm_node_hostnames.stdout_lines }}"
+      delegate_to: "{{ item.node }}"
+      loop: "{{ directories_to_create }}"
       vars:
-        # Ensures Ansible connects to the worker nodes with the correct credentials
         ansible_user: "{{ ansible_user | default(lookup('env', 'USER')) }}"
+
+    - name: Set directories creation facts
+      ansible.builtin.set_fact:
+        directories_to_create: "{{ directories_to_create | default([]) + [{'node': node, 'path': path}] }}"
+      loop: "{{ swarm_node_hostnames.stdout_lines }}"
+      loop_control:
+        loop_var: node
+      vars:
+        paths:
+          - /var/log/nginx/waf
+          - /var/cache/nginx
     # ===================================================================
     # END: RELIABLE DIRECTORY CREATION
     # ===================================================================
 
     - name: Pre-pull required images on all nodes
-      ansible.builtin.command: docker image pull {{ item }}
+      ansible.builtin.command: docker image pull {{ image }}
       delegate_to: "{{ node_hostname }}"
+      loop: "{{ swarm_node_hostnames.stdout_lines | product(image_list) | list }}"
       loop_control:
-        loop_var: node_hostname
-      with_items: "{{ swarm_node_hostnames.stdout_lines }}"
-      loop:
-        - owasp/modsecurity-crs:nginx-alpine
-        - "{{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag | default('latest') }}"
-        - redis:7-alpine
+        label: "{{ item.0 }}:{{ item.1 }}"
+      vars:
+        node_hostname: "{{ item.0 }}"
+        image: "{{ item.1 }}"
+        image_list:
+          - owasp/modsecurity-crs:nginx-alpine
+          - "{{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag | default('latest') }}"
+          - redis:7-alpine
 
     # ===================================================================
     # BEGIN: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
