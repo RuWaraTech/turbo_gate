@@ -1,4 +1,3 @@
----
 - name: Deploy TurboGate with Load Balancer SSL Termination
   hosts: swarm_managers
   become: yes
@@ -108,9 +107,7 @@
 
     # Alternative approach: Use init containers or named volumes
     - name: Create nginx log volume if using named volumes
-      ansible.builtin.shell: |
-        # Create a named volume for nginx logs if it doesn't exist
-        docker volume create nginx_waf_logs || true
+      ansible.builtin.shell: "docker volume create nginx_waf_logs || true"
       when: use_named_volumes | default(false)
 
     # ===================================================================
