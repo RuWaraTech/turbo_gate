@@ -60,7 +60,8 @@
     # --- SECRET MANAGEMENT ---
     - name: Create new versioned Docker secrets
       ansible.builtin.shell:
-        cmd: "echo -n '{{ item.value }}' | docker secret create {{ item.name }}_v{{ resource_version }} -"
+        cmd: |
+          echo -n "{{ item.value }}" | docker secret create {{ item.name }}_v{{ resource_version }} -
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
@@ -69,7 +70,8 @@
     # Only try to create unversioned secrets if stack doesn't exist
     - name: Create unversioned secret aliases (new deployment only)
       ansible.builtin.shell:
-        cmd: "echo -n '{{ item.value }}' | docker secret create {{ item.name }} -"
+        cmd: |
+          echo -n "{{ item.value }}" | docker secret create {{ item.name }} -
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
