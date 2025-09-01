@@ -41,35 +41,77 @@
         - /opt/turbogate
         - /var/log/turbogate
         - /var/lib/turbogate/redis
-        - /var/log/nginx/waf
-        - /var/cache/nginx
 
-    - name: Create nginx/waf directory on all swarm nodes
+    # IMPROVED: Better directory creation on all swarm nodes
+    - name: Get list of all swarm nodes
       ansible.builtin.shell: |
-        # Get all node hostnames
-        docker node ls --format "{{'{{'}}{{'}}'}}}.Hostname{{'{{'}}{{'}}'}}}" | while read node; do
-          if [ "$node" = "$(hostname)" ]; then
-            # Already created above for local node
-            echo "Directory already created on manager: $node"
-          else
-            # Create on remote nodes via SSH
-            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $node "sudo mkdir -p /var/log/nginx/waf && sudo chmod 755 /var/log/nginx/waf" || echo "Warning: Could not create directory on $node"
-          fi
-        done
-      register: create_dirs_on_nodes
-      failed_when: false
+        docker node ls --format '{{ "{{" }}.Hostname{{ "}}" }}' | grep -v "^$"
+      register: swarm_nodes
+      changed_when: false
+
+    - name: Create required directories on all swarm nodes
+      block:
+        - name: Create directories on manager node
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+          loop:
+            - /var/log/nginx/waf
+            - /var/cache/nginx
+
+        - name: Create directories on worker nodes via docker exec
+          ansible.builtin.shell: |
+            # Use docker to run commands on each node
+            docker node ls --format '{{ "{{" }}.Hostname{{ "}}" }}' | while read node_hostname; do
+              if [ "$node_hostname" != "$(hostname)" ]; then
+                echo "Creating directories on node: $node_hostname"
+                # Try to create a temporary service that runs on the specific node
+                docker service create \
+                  --name temp-dir-creator-$(date +%s) \
+                  --constraint "node.hostname==$node_hostname" \
+                  --mode global \
+                  --restart-condition none \
+                  --mount type=bind,source=/,target=/host \
+                  alpine:latest \
+                  sh -c "mkdir -p /host/var/log/nginx/waf /host/var/cache/nginx && chmod 755 /host/var/log/nginx/waf /host/var/cache/nginx && echo 'Directories created on' \$(hostname)" || true
+                
+                # Wait a moment then clean up
+                sleep 3
+                docker service rm temp-dir-creator-$(date +%s) 2>/dev/null || true
+              fi
+            done
+          register: create_dirs_result
+          failed_when: false
+          ignore_errors: yes
 
     - name: Pre-pull nginx-waf image on all nodes
       ansible.builtin.shell: |
         # Pull on manager first
         docker pull owasp/modsecurity-crs:nginx-alpine
         
-        # Pull on worker nodes
-        docker node ls --format "{{'{{'}}{{'}}'}}}.Hostname{{'{{'}}{{'}}'}}}" | grep -v $(hostname) | while read node; do
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $node "docker pull owasp/modsecurity-crs:nginx-alpine" || echo "Warning: Could not pull image on $node"
-        done
+        # Create a temporary global service to pull image on all nodes
+        docker service create \
+          --name temp-image-puller \
+          --mode global \
+          --restart-condition none \
+          owasp/modsecurity-crs:nginx-alpine \
+          echo "Image pulled on $(hostname)"
+        
+        # Wait for it to complete then clean up
+        sleep 30
+        docker service rm temp-image-puller
       register: pull_images
       failed_when: false
+
+    # Alternative approach: Use init containers or named volumes
+    - name: Create nginx log volume if using named volumes
+      ansible.builtin.shell: |
+        # Create a named volume for nginx logs if it doesn't exist
+        docker volume create nginx_waf_logs || true
+      when: use_named_volumes | default(false)
 
     # ===================================================================
     # BEGIN: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
@@ -195,6 +237,17 @@
         mode: '0644'
         backup: yes
 
+    # Remove existing failing service before deployment
+    - name: Remove failing nginx-waf service if exists
+      ansible.builtin.shell: |
+        if docker service ls --filter name={{ stack_name }}_nginx-waf --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q .; then
+          echo "Removing existing failing nginx-waf service"
+          docker service rm {{ stack_name }}_nginx-waf || true
+          sleep 10
+        fi
+      register: remove_failing_service
+      failed_when: false
+
     # Proper deployment strategy
     - name: Deploy Docker stack (new deployment)
       community.docker.docker_stack:
@@ -232,126 +285,44 @@
               {{ stack_name }}_redis
           register: redis_update
 
-        - name: Check if nginx-waf service exists and is running
-          ansible.builtin.shell: |
-            docker service ls --filter name={{ stack_name }}_nginx-waf --format '{% raw %}{{.Replicas}}{% endraw %}'
-          register: nginx_waf_status
-          failed_when: false
-
-        - name: Check nginx service name and status
-          ansible.builtin.shell: |
-            # Try to find the nginx service with different possible names
-            for service_name in nginx-waf nginx nginx_waf; do
-              if docker service ls --filter name={{ stack_name }}_${service_name} --format '{% raw %}{{.Name}}{% endraw %}' | grep -q .; then
-                echo "{{ stack_name }}_${service_name}"
-                exit 0
-              fi
-            done
-            echo "NOT_FOUND"
-          register: nginx_service_name
-          failed_when: false
-
-        - name: Update nginx-waf service with new configs
-          ansible.builtin.shell: |
-            if [ "{{ nginx_service_name.stdout }}" != "NOT_FOUND" ]; then
-              docker service update \
-                --config-rm modsecurity_config \
-                --config-add source=modsecurity_config_v{{ resource_version }},target=/etc/nginx/modsecurity/modsecurity.conf \
-                --config-rm modsecurity_rules \
-                --config-add source=modsecurity_rules_v{{ resource_version }},target=/etc/nginx/modsecurity/main.conf \
-                --config-rm nginx_backend_config \
-                --config-add source=nginx_backend_config_v{{ resource_version }},target=/etc/nginx/nginx.conf \
-                --update-parallelism 1 \
-                --update-delay 30s \
-                {{ nginx_service_name.stdout }}
-            else
-              echo "Nginx service not found, will be created by stack deploy"
-            fi
-          register: nginx_update
-          failed_when: false
-          when: nginx_service_name.stdout != "NOT_FOUND" and (nginx_waf_status.stdout != "" and nginx_waf_status.stdout != "0/0")
-          timeout: 60
-
-        - name: Redeploy stack if nginx-waf is broken
+        - name: Redeploy stack to fix nginx-waf issues
           community.docker.docker_stack:
             name: "{{ stack_name }}"
             compose:
               - "{{ compose_file }}"
             state: present
             prune: yes
-          when: nginx_waf_status.stdout == "0/0" or nginx_waf_status.stdout == ""
           register: stack_redeploy
               
       when: stack_exists
-
-    - name: Force redeploy stack if nginx-waf is missing or broken
-      block:
-        - name: Check nginx-waf service status
-          ansible.builtin.shell: |
-            docker service ls --filter name={{ stack_name }}_nginx-waf --format '{% raw %}{{.Replicas}}{% endraw %}'
-          register: nginx_waf_replicas
-          failed_when: false
-
-        - name: Redeploy stack if nginx-waf is broken
-          community.docker.docker_stack:
-            name: "{{ stack_name }}"
-            compose:
-              - "{{ compose_file }}"
-            state: present
-            prune: yes
-          when: nginx_waf_replicas.stdout == "" or nginx_waf_replicas.stdout == "0/0"
-          register: stack_recovery
 
     - name: Wait for services to stabilize
       ansible.builtin.pause:
         seconds: 45
 
-    # - name: Verify application services are running
-    #   ansible.builtin.shell: |
-    #     # Determine the actual nginx service name
-    #     NGINX_SERVICE=""
-    #     for service_name in nginx-waf nginx nginx_waf; do
-    #       if docker service ls --filter name={{ stack_name }}_${service_name} --format '{{ "{{" }}.Name{{ "}}" }}' | grep -q .; then
-    #         NGINX_SERVICE="{{ stack_name }}_${service_name}"
-    #         break
-    #       fi
-    #     done
+    - name: Verify nginx-waf service is running properly
+      ansible.builtin.shell: |
+        # Check nginx-waf service status
+        replicas=$(docker service ls --filter name={{ stack_name }}_nginx-waf --format '{{ "{{" }}.Replicas{{ "}}" }}')
+        if [ -z "$replicas" ]; then
+          echo "ERROR: nginx-waf service not found"
+          exit 1
+        fi
         
-    #     # Check core services
-    #     for service in turbogate redis; do
-    #       FORMAT_REPLICAS='{{ "{{" }}.Replicas{{ "}}" }}'
-    #       replicas=$(docker service ls --filter name={{ stack_name }}_$service --format "$FORMAT_REPLICAS")
-    #       if [ -z "$replicas" ]; then
-    #         echo "ERROR: Service {{ stack_name }}_$service not found."
-    #         exit 1
-    #       fi
-    #       running=$(echo $replicas | cut -d'/' -f1)
-    #       desired=$(echo $replicas | cut -d'/' -f2)
-    #       if [ "$running" != "$desired" ] || [ "$running" -lt "1" ]; then
-    #         echo "ERROR: Service {{ stack_name }}_$service is not running correctly. Replicas: $replicas"
-    #         docker service ps {{ stack_name }}_$service --no-trunc
-    #         exit 1
-    #       fi
-    #       echo "✓ Service {{ stack_name }}_$service is running with replicas: $replicas"
-    #     done
+        running=$(echo $replicas | cut -d'/' -f1)
+        desired=$(echo $replicas | cut -d'/' -f2)
         
-    #     # Check nginx if it exists
-    #     if [ ! -z "$NGINX_SERVICE" ]; then
-    #       FORMAT_REPLICAS='{{ "{{" }}.Replicas{{ "}}" }}'
-    #       replicas=$(docker service ls --filter name=$NGINX_SERVICE --format "$FORMAT_REPLICAS")
-    #       if [ ! -z "$replicas" ] && [ "$replicas" != "0/0" ]; then
-    #         echo "✓ Nginx service $NGINX_SERVICE status: $replicas"
-    #       else
-    #         echo "⚠️ Nginx service $NGINX_SERVICE exists but not running: $replicas"
-    #         # Don't fail for nginx, as it might be optional or being recreated
-    #       fi
-    #     else
-    #       echo "⚠️ No nginx service found in stack"
-    #     fi
-    #   register: service_check
-    #   retries: 8
-    #   delay: 15
-    #   until: service_check.rc == 0
+        if [ "$running" != "$desired" ] || [ "$running" -lt "1" ]; then
+          echo "ERROR: nginx-waf service not running properly. Replicas: $replicas"
+          docker service ps {{ stack_name }}_nginx-waf --no-trunc
+          exit 1
+        fi
+        
+        echo "✅ nginx-waf service running with replicas: $replicas"
+      register: nginx_service_check
+      retries: 6
+      delay: 10
+      until: nginx_service_check.rc == 0
 
     - name: Final health check via Load Balancer
       ansible.builtin.uri:
@@ -364,43 +335,6 @@
       retries: 12
       delay: 15
       until: lb_https_health.status == 200
-
-    - name: List all secrets for cleanup
-      ansible.builtin.command: docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}'
-      register: all_secrets_post_deploy
-      changed_when: false
-      when: stack_deploy.changed
-
-    - name: Clean up old versioned secrets (keep only current version)
-      ansible.builtin.command: docker secret rm {{ item }}
-      loop: "{{ all_secrets_post_deploy.stdout_lines | default([]) }}"
-      when:
-        - all_secrets_post_deploy is defined
-        - all_secrets_post_deploy.stdout_lines is defined
-        - item is regex('^(turbogate_secret_key|redis_password)_v[0-9]+$')
-        - item != 'turbogate_secret_key_v' + resource_version
-        - item != 'redis_password_v' + resource_version
-      failed_when: false
-      ignore_errors: yes
-
-    - name: List all configs for cleanup
-      ansible.builtin.command: docker config ls --format '{{ "{{" }}.Name{{ "}}" }}'
-      register: all_configs_post_deploy
-      changed_when: false
-      when: stack_deploy.changed
-
-    - name: Clean up old versioned nginx configs (keep only current version)
-      ansible.builtin.command: docker config rm {{ item }}
-      loop: "{{ all_configs_post_deploy.stdout_lines | default([]) }}"
-      when:
-        - all_configs_post_deploy is defined
-        - all_configs_post_deploy.stdout_lines is defined
-        - item is regex('^(modsecurity_config|modsecurity_rules|nginx_backend_config)_v[0-9]+$')
-        - item != 'modsecurity_config_v' + resource_version
-        - item != 'modsecurity_rules_v' + resource_version
-        - item != 'nginx_backend_config_v' + resource_version
-      failed_when: false
-      ignore_errors: yes
 
     - name: Display deployment summary
       ansible.builtin.debug:

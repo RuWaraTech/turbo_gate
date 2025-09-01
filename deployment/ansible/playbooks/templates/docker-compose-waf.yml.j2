@@ -25,7 +25,8 @@ services:
       - source: modsecurity_rules
         target: /etc/nginx/modsecurity/main.conf
     volumes:
-      - /var/log/nginx/waf:/var/log/nginx
+      # FIXED: Use named volume instead of bind mount
+      - nginx_waf_logs:/var/log/nginx
       - /var/cache/nginx:/var/cache/nginx
     networks:
       - turbogate_frontend
@@ -97,6 +98,9 @@ volumes:
       type: none
       o: bind
       device: /var/lib/turbogate/redis
+  # ADDED: Named volume for nginx WAF logs
+  nginx_waf_logs:
+    driver: local
 
 networks:
   turbogate_frontend:
