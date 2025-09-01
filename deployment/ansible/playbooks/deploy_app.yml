@@ -48,30 +48,19 @@
       ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}'
       register: swarm_node_hostnames
       changed_when: false
-      run_once: true # This command only needs to run on the manager
+      run_once: true
 
-    - name: Create NGINX directories on ALL swarm nodes directly
+    - name: Create NGINX directories on ALL swarm nodes
       ansible.builtin.file:
-        path: "{{ item.path }}"
+        path: "{{ item.1 }}"
         state: directory
         owner: root
         group: root
         mode: '0755'
-      delegate_to: "{{ item.node }}"
-      loop: "{{ directories_to_create }}"
+      delegate_to: "{{ item.0 }}"
+      loop: "{{ swarm_node_hostnames.stdout_lines | product(['/var/log/nginx/waf', '/var/cache/nginx']) | list }}"
       vars:
         ansible_user: "{{ ansible_user | default(lookup('env', 'USER')) }}"
-
-    - name: Set directories creation facts
-      ansible.builtin.set_fact:
-        directories_to_create: "{{ directories_to_create | default([]) + [{'node': node, 'path': path}] }}"
-      loop: "{{ swarm_node_hostnames.stdout_lines }}"
-      loop_control:
-        loop_var: node
-      vars:
-        paths:
-          - /var/log/nginx/waf
-          - /var/cache/nginx
     # ===================================================================
     # END: RELIABLE DIRECTORY CREATION
     # ===================================================================
