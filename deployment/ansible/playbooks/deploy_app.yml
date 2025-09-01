@@ -58,9 +58,8 @@
         group: root
         mode: '0755'
       delegate_to: "{{ item.0 }}"
+      delegate_facts: true
       loop: "{{ swarm_node_hostnames.stdout_lines | product(['/var/log/nginx/waf', '/var/cache/nginx']) | list }}"
-      vars:
-        ansible_user: "{{ ansible_user | default(lookup('env', 'USER')) }}"
     # ===================================================================
     # END: RELIABLE DIRECTORY CREATION
     # ===================================================================
