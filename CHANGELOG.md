@@ -1,3 +1,9 @@
+## v0.9.24 (2025-09-01)
+
+### fix
+
+- remove Duplicate variable declaration
+
 ## v0.9.23 (2025-09-01)
 
 ### fix
