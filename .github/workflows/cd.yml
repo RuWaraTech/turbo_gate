@@ -341,21 +341,21 @@ jobs:
 
         
       
-      - name: Setup SSL Synchronization (if needed)
-        working-directory: deployment/ansible
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: False
-        run: |
-          # Check if certificates exist on all nodes
-          if ! ansible all -i inventory/production.yml -m stat -a "path=/etc/letsencrypt/live/${{ secrets.DOMAIN_NAME }}/fullchain.pem" | grep -q "exists.*true"; then
-            echo "Running SSL sync setup..."
-            ansible-playbook -i inventory/production.yml playbooks/setup_ssl_sync.yml \
-              -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
-              -e "admin_email=${{ secrets.ADMIN_EMAIL }}" \
-              -vvv
-          else
-            echo "SSL certificates already synced"
-          fi
+      # - name: Setup SSL Synchronization (if needed)
+      #   working-directory: deployment/ansible
+      #   env:
+      #     ANSIBLE_HOST_KEY_CHECKING: False
+      #   run: |
+      #     # Check if certificates exist on all nodes
+      #     if ! ansible all -i inventory/production.yml -m stat -a "path=/etc/letsencrypt/live/${{ secrets.DOMAIN_NAME }}/fullchain.pem" | grep -q "exists.*true"; then
+      #       echo "Running SSL sync setup..."
+      #       ansible-playbook -i inventory/production.yml playbooks/setup_ssl_sync.yml \
+      #         -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
+      #         -e "admin_email=${{ secrets.ADMIN_EMAIL }}" \
+      #         -vvv
+      #     else
+      #       echo "SSL certificates already synced"
+      #     fi
 
       - name: Deploy Application with WAF
         working-directory: deployment/ansible
