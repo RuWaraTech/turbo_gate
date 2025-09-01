@@ -242,9 +242,3 @@ variable "nginx_replicas" {
   }
 }
 
-variable "manage_dns" {
-  description = "Whether to manage DNS records in Hetzner"
-  type        = bool
-  default     = true
-}
-
