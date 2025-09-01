@@ -24,13 +24,6 @@ services:
         published: 80
         protocol: tcp
         mode: host
-    configs:
-      - source: nginx_backend_config
-        target: /etc/nginx/nginx.conf
-      - source: modsecurity_config
-        target: /etc/nginx/modsecurity/modsecurity.conf
-      - source: modsecurity_rules
-        target: /etc/nginx/modsecurity/main.conf
     volumes:
       # FIXED: Use named volume instead of bind mount
       - nginx_waf_logs:/var/log/nginx
