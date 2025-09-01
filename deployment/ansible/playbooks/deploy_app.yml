@@ -61,30 +61,20 @@
             - /var/log/nginx/waf
             - /var/cache/nginx
 
-        - name: Create directories on worker nodes via docker exec
+        - name: Create directories on worker nodes using simple approach
           ansible.builtin.shell: |
-            # Use docker to run commands on each node
-            docker node ls --format '{{ "{{" }}.Hostname{{ "}}" }}' | while read node_hostname; do
-              if [ "$node_hostname" != "$(hostname)" ]; then
-                echo "Creating directories on node: $node_hostname"
-                # Try to create a temporary service that runs on the specific node
-                docker service create \
-                  --name temp-dir-creator-$(date +%s) \
-                  --constraint "node.hostname==$node_hostname" \
-                  --mode global \
-                  --restart-condition none \
-                  --mount type=bind,source=/,target=/host \
-                  alpine:latest \
-                  sh -c "mkdir -p /host/var/log/nginx/waf /host/var/cache/nginx && chmod 755 /host/var/log/nginx/waf /host/var/cache/nginx && echo 'Directories created on' \$(hostname)" || true
-                
-                # Wait a moment then clean up
-                sleep 3
-                docker service rm temp-dir-creator-$(date +%s) 2>/dev/null || true
-              fi
+            # Get worker node hostnames (excluding manager)
+            docker node ls --format '{{ "{{" }}.Hostname{{ "}}" }}' | grep -v "$(hostname)" | while read worker_hostname; do
+              echo "Creating directories on worker: $worker_hostname"
+              # Use SSH to create directories (assuming SSH access is configured)
+              ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $worker_hostname \
+                "sudo mkdir -p /var/log/nginx/waf /var/cache/nginx && sudo chmod 755 /var/log/nginx/waf /var/cache/nginx" || \
+                echo "Warning: Could not create directories on $worker_hostname"
             done
-          register: create_dirs_result
+          register: worker_dir_create
           failed_when: false
           ignore_errors: yes
+          when: swarm_nodes.stdout_lines | length > 1  # Only run if there are worker nodes
 
     - name: Pre-pull nginx-waf image on all nodes
       ansible.builtin.shell: |
