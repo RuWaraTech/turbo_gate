@@ -388,7 +388,7 @@ jobs:
             -e "waf_paranoia_level=2" \
             -e "app_replicas=3" \
             -e "ssl_certificate_type=managed" \
-            -vvv
+            -vv
 
 
 
