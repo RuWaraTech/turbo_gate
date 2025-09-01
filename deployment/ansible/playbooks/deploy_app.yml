@@ -5,9 +5,7 @@
   
   vars:
     stack_name: turbogate
-    compose_file: /opt/turbogate/docker-compose-lb-ssl.yml
-    health_check_timeout: 120
-    deployment_timeout: 600
+    compose_file: /opt/turbogate/docker-compose-waf.yml
     
   tasks:
     - name: Validate required variables
@@ -17,20 +15,20 @@
           - redis_password is defined
           - domain_name is defined
           - image_tag is defined
-          - ssl_certificate_type == "managed"  # Ensure managed certs for LB
+          - ssl_certificate_type == "managed"
         fail_msg: "Required variables must be defined and ssl_certificate_type must be 'managed' for LB SSL termination"
 
-    - name: Verify Load Balancer SSL certificate is ready
+    - name: Verify Load Balancer is reachable
       ansible.builtin.uri:
-        url: "https://{{ domain_name }}/health"
+        url: "https://{{ domain_name }}/lb-health"
         method: GET
         timeout: 10
         validate_certs: yes
-        status_code: [200, 502, 503]  # Allow backend errors while checking SSL
+        status_code: [200, 502, 503]
       register: lb_ssl_check
       retries: 10
       delay: 30
-      until: lb_ssl_check.status != -1  # Any response means SSL is working
+      until: lb_ssl_check.status != -1
 
     - name: Create required directories
       ansible.builtin.file:
@@ -46,128 +44,122 @@
         - /var/log/nginx/waf
         - /var/cache/nginx
 
-    - name: Create Docker secrets
-      ansible.builtin.shell: |
-        # Remove old secrets if they exist
-        docker secret ls --format '{{.Name}}' | grep -E '^(turbogate_secret_key|redis_password)' | \
-          xargs -r docker secret rm 2>/dev/null || true
-        
-        # Create new secrets
-        echo -n "{{ secret_key }}" | docker secret create turbogate_secret_key -
-        echo -n "{{ redis_password }}" | docker secret create redis_password -
+    # ===================================================================
+    # BEGIN: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
+    # ===================================================================
+
+    - name: Get current timestamp for versioning
+      ansible.builtin.set_fact:
+        resource_version: "{{ ansible_date_time.epoch }}"
+
+    # --- SECRET MANAGEMENT ---
+    - name: Create new versioned Docker secrets
+      ansible.builtin.shell:
+        cmd: "echo -n \"{{ item.value }}\" | docker secret create {{ item.name }}_v{{ resource_version }} -"
+      loop:
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
+        - { name: "redis_password", value: "{{ redis_password }}" }
       no_log: true
 
-    - name: Create ModSecurity configuration
-      ansible.builtin.shell: |
-        docker config rm modsecurity_config 2>/dev/null || true
-        
-        cat << 'EOF' | docker config create modsecurity_config -
-        SecRuleEngine {{ waf_rule_engine | default('On') }}
-        SecRequestBodyAccess On
-        SecResponseBodyAccess On
-        SecResponseBodyMimeType text/plain text/html text/xml application/json
-        SecResponseBodyLimit 524288
-        SecResponseBodyLimitAction ProcessPartial
-        
-        SecAuditEngine {{ waf_audit_engine | default('RelevantOnly') }}
-        SecAuditLogRelevantStatus "^(?:5|4(?!04))"
-        SecAuditLogParts ABDEFHIJZ
-        SecAuditLogType Serial
-        SecAuditLog /var/log/nginx/modsec_audit.log
-        
-        SecArgumentSeparator &
-        SecCookieFormat 0
-        SecTmpDir /var/modsecurity/tmp/
-        SecDataDir /var/modsecurity/data/
-        
-        SecDebugLog /var/log/nginx/modsec_debug.log
-        SecDebugLogLevel 0
-        EOF
+    - name: Remove old unversioned secret aliases
+      ansible.builtin.command: "docker secret rm {{ item }}"
+      loop:
+        - turbogate_secret_key
+        - redis_password
+      ignore_errors: yes
+      changed_when: false
 
-    - name: Create ModSecurity rules with OWASP CRS
-      ansible.builtin.shell: |
-        docker config rm modsecurity_rules 2>/dev/null || true
-        
-        cat << 'EOF' | docker config create modsecurity_rules -
-        Include /etc/nginx/modsecurity/modsecurity.conf
-        
-        # Load OWASP Core Rule Set
-        Include /usr/local/owasp-modsecurity-crs/crs-setup.conf
-        Include /usr/local/owasp-modsecurity-crs/rules/*.conf
-        
-        # Health check exclusions
-        SecRule REQUEST_URI "@beginsWith /health" \
-            "id:1000,phase:1,pass,nolog,ctl:ruleEngine=Off"
-        SecRule REQUEST_URI "@beginsWith /waf-health" \
-            "id:1001,phase:1,pass,nolog,ctl:ruleEngine=Off"
-        SecRule REQUEST_URI "@beginsWith /lb-health" \
-            "id:1002,phase:1,pass,nolog,ctl:ruleEngine=Off"
-        
-        # Trust Load Balancer headers
-        SecRule REQUEST_HEADERS:X-Forwarded-Proto "@streq https" \
-            "id:1003,phase:1,pass,nolog,setvar:tx.lb_ssl_terminated=1"
-        
-        # Set paranoia level
-        SecAction \
-            "id:900000,phase:1,nolog,pass,t:none,\
-            setvar:tx.paranoia_level={{ waf_paranoia_level | default(2) }}"
-        
-        # Set anomaly thresholds
-        SecAction \
-            "id:900001,phase:1,nolog,pass,t:none,\
-            setvar:tx.inbound_anomaly_score_threshold={{ waf_anomaly_inbound | default(10) }},\
-            setvar:tx.outbound_anomaly_score_threshold={{ waf_anomaly_outbound | default(8) }}"
-        EOF
+    - name: Re-create secret aliases for compose file compatibility
+      ansible.builtin.shell:
+        cmd: "echo -n \"{{ item.value }}\" | docker secret create {{ item.name }} -"
+      loop:
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
+        - { name: "redis_password", value: "{{ redis_password }}" }
+      no_log: true
+      
+    # --- CONFIG MANAGEMENT ---
+    - name: Create ModSecurity configuration content in a temporary file
+      ansible.builtin.copy:
+        dest: "/tmp/modsecurity.conf"
+        content: |
+          SecRuleEngine {{ waf_rule_engine | default('On') }}
+          SecRequestBodyAccess On
+          SecResponseBodyAccess On
+          SecResponseBodyMimeType text/plain text/html text/xml application/json
+          SecResponseBodyLimit 524288
+          SecResponseBodyLimitAction ProcessPartial
+          SecAuditEngine {{ waf_audit_engine | default('RelevantOnly') }}
+          SecAuditLogRelevantStatus "^(?:5|4(?!04))"
+          SecAuditLogParts ABDEFHIJZ
+          SecAuditLogType Serial
+          SecAuditLog /var/log/nginx/modsec_audit.log
 
-    - name: Create backend NGINX configuration (no SSL)
+    - name: Create ModSecurity rules content in a temporary file
+      ansible.builtin.copy:
+        dest: "/tmp/modsecurity_rules.conf"
+        content: |
+          Include /etc/nginx/modsecurity/modsecurity.conf
+          Include /usr/local/owasp-modsecurity-crs/crs-setup.conf
+          Include /usr/local/owasp-modsecurity-crs/rules/*.conf
+          SecRule REQUEST_URI "@beginsWith /health" "id:1000,phase:1,pass,nolog,ctl:ruleEngine=Off"
+          SecRule REQUEST_URI "@beginsWith /waf-health" "id:1001,phase:1,pass,nolog,ctl:ruleEngine=Off"
+          SecRule REQUEST_URI "@beginsWith /lb-health" "id:1002,phase:1,pass,nolog,ctl:ruleEngine=Off"
+          SecAction "id:900000,phase:1,nolog,pass,t:none,setvar:tx.paranoia_level={{ waf_paranoia_level | default(2) }}"
+          SecAction "id:900001,phase:1,nolog,pass,t:none,setvar:tx.inbound_anomaly_score_threshold={{ waf_anomaly_inbound | default(10) }},setvar:tx.outbound_anomaly_score_threshold={{ waf_anomaly_outbound | default(8) }}"
+
+    - name: Create backend NGINX config content from template
       ansible.builtin.template:
-        src: nginx-backend.conf.j2
-        dest: /tmp/nginx-backend.conf
+        src: nginx-waf.conf.j2
+        dest: /tmp/nginx-waf.conf
         mode: '0644'
 
-    - name: Create NGINX backend Docker config
-      ansible.builtin.shell: |
-        docker config rm nginx_backend_config 2>/dev/null || true
-        docker config create nginx_backend_config /tmp/nginx-backend.conf
-        rm -f /tmp/nginx-backend.conf
+    - name: Remove old unversioned config aliases
+      ansible.builtin.command: "docker config rm {{ item }}"
+      loop:
+        - modsecurity_config
+        - modsecurity_rules
+        - nginx_backend_config
+      ignore_errors: yes
+      changed_when: false
 
-    - name: Label all nodes for backend WAF deployment
-      community.docker.docker_node:
-        hostname: "{{ item }}"
-        labels:
-          waf_enabled: "true"
-          ssl_termination: "load_balancer"
-          backend_mode: "true"
-      delegate_to: "{{ inventory_hostname }}"
-      with_items: "{{ groups['all'] | map('extract', hostvars, 'ansible_hostname') | list }}"
+    - name: Re-create config aliases for compose file compatibility
+      ansible.builtin.command: "docker config create {{ item.name }} {{ item.path }}"
+      loop:
+        - { name: "modsecurity_config", path: "/tmp/modsecurity.conf" }
+        - { name: "modsecurity_rules", path: "/tmp/modsecurity_rules.conf" }
+        - { name: "nginx_backend_config", path: "/tmp/nginx-waf.conf" }
+    
+    - name: Clean up temporary config files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/modsecurity.conf
+        - /tmp/modsecurity_rules.conf
+        - /tmp/nginx-waf.conf
+
+    # ===================================================================
+    # END: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
+    # ===================================================================
 
     - name: Create overlay networks if not exist
       community.docker.docker_network:
         name: "{{ item }}"
         driver: overlay
         attachable: yes
-        driver_options:
-          encrypted: "true"
       loop:
         - turbogate_frontend
         - turbogate_backend
         - turbogate_database
 
-    - name: Create Docker Compose file for LB SSL termination
+    - name: Create Docker Compose file from template
       ansible.builtin.template:
-        src: docker-compose-lb-ssl.yml.j2
+        src: docker-compose-waf.yml.j2
         dest: "{{ compose_file }}"
-        owner: root
-        group: root
         mode: '0644'
         backup: yes
 
-    - name: Check if stack exists
-      ansible.builtin.command: docker stack ls --format '{{.Name}}'
-      register: existing_stacks
-      changed_when: false
-
-    - name: Deploy stack with Load Balancer SSL termination
+    - name: Deploy Docker stack
       community.docker.docker_stack:
         name: "{{ stack_name }}"
         compose:
@@ -180,74 +172,25 @@
       ansible.builtin.pause:
         seconds: 30
 
-    - name: Verify global NGINX backend deployment
-      ansible.builtin.shell: |
-        EXPECTED_NODES=$(docker node ls -q | wc -l)
-        echo "Expecting nginx-waf on $EXPECTED_NODES nodes (backend mode)..."
-        
-        for i in {1..30}; do
-          RUNNING=$(docker service ps {{ stack_name }}_nginx-waf \
-            --filter desired-state=running -q 2>/dev/null | wc -l)
-          echo "Attempt $i: $RUNNING/$EXPECTED_NODES instances running"
-          
-          if [ "$RUNNING" -eq "$EXPECTED_NODES" ]; then
-            echo "✓ Global backend deployment successful"
-            exit 0
-          fi
-          sleep 10
-        done
-        
-        echo "Backend deployment status:"
-        docker service ps {{ stack_name }}_nginx-waf --no-trunc
-        exit 1
-      register: backend_deployment_check
-      retries: 2
-      delay: 30
-      until: backend_deployment_check.rc == 0
-
-    - name: Verify application services
-      ansible.builtin.shell: |
-        for service in nginx-waf turbogate redis; do
-          echo "Checking {{ stack_name }}_$service..."
-          RUNNING=$(docker service ls --filter name={{ stack_name }}_$service \
-            --format '{{.Replicas}}' | cut -d'/' -f1)
-          
-          if [ "$RUNNING" -lt "1" ]; then
-            echo "ERROR: Service $service not running"
-            exit 1
-          fi
-          echo "✓ $service: $RUNNING instances running (backend mode)"
-        done
+    - name: Verify application services are running
+      ansible.builtin.shell:
+        cmd: |
+          for service in nginx-waf turbogate redis; do
+            replicas=$(docker service ls --filter name={{ stack_name }}_$service --format '{{.Replicas}}')
+            running=$(echo $replicas | cut -d'/' -f1)
+            if [ "$running" -lt "1" ]; then
+              echo "ERROR: Service $service is not running."
+              docker service ps {{ stack_name }}_$service --no-trunc
+              exit 1
+            fi
+            echo "✓ Service $service is running with replicas: $replicas"
+          done
       register: service_check
       retries: 5
-      delay: 10
+      delay: 15
       until: service_check.rc == 0
 
-    - name: Test backend WAF on each node (HTTP only)
-      ansible.builtin.shell: |
-        for node in $(docker node ls --format '{{.Hostname}}'); do
-          NODE_IP=$(docker node inspect $node --format '{{.Status.Addr}}')
-          echo "Testing backend WAF on $node ($NODE_IP)..."
-          
-          # Test health endpoint via HTTP (backend mode)
-          if curl -sSf --max-time 10 "http://$NODE_IP:8080/waf-health" > /dev/null; then
-            echo "✓ Backend WAF health check passed on $node"
-          else
-            echo "✗ Backend WAF health check failed on $node"
-            exit 1
-          fi
-        done
-      register: backend_waf_test
-      retries: 3
-      delay: 10
-      until: backend_waf_test.rc == 0
-
-    - name: Wait for Load Balancer SSL certificate to be ready
-      ansible.builtin.pause:
-        seconds: 60
-        prompt: "Waiting for Load Balancer SSL certificate to provision..."
-
-    - name: Verify HTTPS endpoint via Load Balancer
+    - name: Final health check via Load Balancer
       ansible.builtin.uri:
         url: "https://{{ domain_name }}/health"
         method: GET
@@ -259,67 +202,19 @@
       delay: 15
       until: lb_https_health.status == 200
 
-    - name: Test Load Balancer to Backend flow
-      ansible.builtin.shell: |
-        # Test that HTTPS at LB level reaches HTTP backends
-        RESPONSE=$(curl -s -H "X-Test-Backend: true" \
-          "https://{{ domain_name }}/waf-health")
-        
-        if echo "$RESPONSE" | grep -q "SSL: Terminated at Load Balancer"; then
-          echo "✓ Load Balancer SSL termination working correctly"
-        else
-          echo "⚠ SSL termination flow may need verification"
-          echo "Response: $RESPONSE"
-        fi
-
-    - name: Test WAF protection via Load Balancer
-      ansible.builtin.shell: |
-        # Test SQL injection (should be blocked by backend WAF)
-        RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-          "https://{{ domain_name }}/?id=1' OR '1'='1" || true)
-        
-        if [ "$RESPONSE" = "403" ]; then
-          echo "✓ Backend WAF is blocking attacks via Load Balancer"
-        else
-          echo "⚠ WAF protection may need verification (got HTTP $RESPONSE)"
-        fi
-
-    - name: Verify SSL termination headers
-      ansible.builtin.shell: |
-        # Check that backend receives correct forwarded headers
-        HEADERS=$(curl -s -I "https://{{ domain_name }}/health" | grep -i "x-")
-        echo "Load Balancer headers being passed:"
-        echo "$HEADERS"
+    - name: Clean up old versioned secrets and configs post-deployment
+      ansible.builtin.shell:
+        cmd: |
+          docker secret ls --format '{{.Name}}' | grep -E '_(v[0-9]+)$' | grep -v "v{{ resource_version }}$" | xargs -r docker secret rm
+          docker config ls --format '{{.Name}}' | grep -E '_(v[0-9]+)$' | grep -v "v{{ resource_version }}$" | xargs -r docker config rm
+      when: stack_deploy.changed
+      ignore_errors: yes
+      changed_when: false
 
     - name: Display deployment summary
       ansible.builtin.debug:
         msg: |
-          ===== LOAD BALANCER SSL TERMINATION DEPLOYMENT COMPLETE =====
+          ✅ DEPLOYMENT COMPLETE ✅
           Stack: {{ stack_name }}
-          Domain: {{ domain_name }}
-          SSL Termination: Load Balancer (Hetzner Managed Certificate)
-          Backend Mode: HTTP only with WAF protection
-          WAF Status: OWASP ModSecurity Active
-          Paranoia Level: {{ waf_paranoia_level | default(2) }}
-          
-          Architecture:
-          Internet -> HTTPS (LB) -> HTTP (Backend NGINX+WAF) -> App
-          
-          Services:
-          - Load Balancer: SSL termination + health checks
-          - nginx-waf: Global HTTP backend with ModSecurity
-          - turbogate: {{ app_replicas | default(3) }} replicas
-          - redis: 1 replica
-          
-          Access URLs:
-          - Main: https://{{ domain_name }} (SSL at LB)
-          - Health: https://{{ domain_name }}/health
-          - Backend Test: http://NODE_IP:8080/waf-health
-          
-          Certificate Management:
-          - Type: Hetzner Managed Certificate
-          - Renewal: Automatic by Hetzner
-          - Cost: Included with Load Balancer
-          
-          Monitor with:
-          docker service logs {{ stack_name }}_nginx-waf --follow
+          Domain: https://{{ domain_name }}
+          Access URL: https://{{ domain_name }}/health
