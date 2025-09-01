@@ -1,3 +1,9 @@
+## v0.9.25 (2025-09-01)
+
+### fix
+
+- will manage this later on
+
 ## v0.9.24 (2025-09-01)
 
 ### fix
