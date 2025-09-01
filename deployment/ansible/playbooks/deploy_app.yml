@@ -62,11 +62,11 @@
     - name: Pre-pull nginx-waf image on all nodes
       ansible.builtin.shell: |
         # Pull on manager first
-        docker pull owasp/modsecurity:3-nginx-alpine
+        docker pull owasp/modsecurity-crs:nginx-alpine
         
         # Pull on worker nodes
         docker node ls --format "{{'{{'}}{{'}}'}}}.Hostname{{'{{'}}{{'}}'}}}" | grep -v $(hostname) | while read node; do
-          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $node "docker pull owasp/modsecurity:3-nginx-alpine" || echo "Warning: Could not pull image on $node"
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $node "docker pull owasp/modsecurity-crs:nginx-alpine" || echo "Warning: Could not pull image on $node"
         done
       register: pull_images
       failed_when: false
@@ -269,9 +269,7 @@
             fi
           register: nginx_update
           failed_when: false
-          when: nginx_service_name.stdout != "NOT_FOUND"
-          when: nginx_waf_status.stdout != "" and nginx_waf_status.stdout != "0/0"
-          failed_when: false
+          when: nginx_service_name.stdout != "NOT_FOUND" and (nginx_waf_status.stdout != "" and nginx_waf_status.stdout != "0/0")
           timeout: 60
 
         - name: Redeploy stack if nginx-waf is broken
