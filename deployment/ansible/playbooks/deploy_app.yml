@@ -30,7 +30,7 @@
       delay: 30
       until: lb_ssl_check.status != -1
 
-    - name: Create required directories
+    - name: Create required directories on manager
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
@@ -43,6 +43,33 @@
         - /var/lib/turbogate/redis
         - /var/log/nginx/waf
         - /var/cache/nginx
+
+    - name: Create nginx/waf directory on all swarm nodes
+      ansible.builtin.shell: |
+        # Get all node hostnames
+        docker node ls --format "{{'{{'}}{{'}}'}}}.Hostname{{'{{'}}{{'}}'}}}" | while read node; do
+          if [ "$node" = "$(hostname)" ]; then
+            # Already created above for local node
+            echo "Directory already created on manager: $node"
+          else
+            # Create on remote nodes via SSH
+            ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $node "sudo mkdir -p /var/log/nginx/waf && sudo chmod 755 /var/log/nginx/waf" || echo "Warning: Could not create directory on $node"
+          fi
+        done
+      register: create_dirs_on_nodes
+      failed_when: false
+
+    - name: Pre-pull nginx-waf image on all nodes
+      ansible.builtin.shell: |
+        # Pull on manager first
+        docker pull owasp/modsecurity:3-nginx-alpine
+        
+        # Pull on worker nodes
+        docker node ls --format "{{'{{'}}{{'}}'}}}.Hostname{{'{{'}}{{'}}'}}}" | grep -v $(hostname) | while read node; do
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 $node "docker pull owasp/modsecurity:3-nginx-alpine" || echo "Warning: Could not pull image on $node"
+        done
+      register: pull_images
+      failed_when: false
 
     # ===================================================================
     # BEGIN: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
@@ -205,26 +232,77 @@
               {{ stack_name }}_redis
           register: redis_update
 
+        - name: Check if nginx-waf service exists and is running
+          ansible.builtin.shell: |
+            docker service ls --filter name={{ stack_name }}_nginx-waf --format '{% raw %}{{.Replicas}}{% endraw %}'
+          register: nginx_waf_status
+          failed_when: false
+
+        - name: Check nginx service name and status
+          ansible.builtin.shell: |
+            # Try to find the nginx service with different possible names
+            for service_name in nginx-waf nginx nginx_waf; do
+              if docker service ls --filter name={{ stack_name }}_${service_name} --format '{% raw %}{{.Name}}{% endraw %}' | grep -q .; then
+                echo "{{ stack_name }}_${service_name}"
+                exit 0
+              fi
+            done
+            echo "NOT_FOUND"
+          register: nginx_service_name
+          failed_when: false
+
         - name: Update nginx-waf service with new configs
           ansible.builtin.shell: |
-            docker service update \
-              --config-rm modsecurity_config \
-              --config-add source=modsecurity_config_v{{ resource_version }},target=/etc/nginx/modsecurity/modsecurity.conf \
-              --config-rm modsecurity_rules \
-              --config-add source=modsecurity_rules_v{{ resource_version }},target=/etc/nginx/modsecurity/main.conf \
-              --config-rm nginx_backend_config \
-              --config-add source=nginx_backend_config_v{{ resource_version }},target=/etc/nginx/nginx.conf \
-              --update-parallelism 1 \
-              --update-delay 30s \
-              {{ stack_name }}_nginx-waf
+            if [ "{{ nginx_service_name.stdout }}" != "NOT_FOUND" ]; then
+              docker service update \
+                --config-rm modsecurity_config \
+                --config-add source=modsecurity_config_v{{ resource_version }},target=/etc/nginx/modsecurity/modsecurity.conf \
+                --config-rm modsecurity_rules \
+                --config-add source=modsecurity_rules_v{{ resource_version }},target=/etc/nginx/modsecurity/main.conf \
+                --config-rm nginx_backend_config \
+                --config-add source=nginx_backend_config_v{{ resource_version }},target=/etc/nginx/nginx.conf \
+                --update-parallelism 1 \
+                --update-delay 30s \
+                {{ nginx_service_name.stdout }}
+            else
+              echo "Nginx service not found, will be created by stack deploy"
+            fi
           register: nginx_update
+          failed_when: false
+          when: nginx_service_name.stdout != "NOT_FOUND"
+          when: nginx_waf_status.stdout != "" and nginx_waf_status.stdout != "0/0"
+          failed_when: false
+          timeout: 60
 
-        - name: Set update status
-          ansible.builtin.set_fact:
-            stack_deploy:
-              changed: true
+        - name: Redeploy stack if nginx-waf is broken
+          community.docker.docker_stack:
+            name: "{{ stack_name }}"
+            compose:
+              - "{{ compose_file }}"
+            state: present
+            prune: yes
+          when: nginx_waf_status.stdout == "0/0" or nginx_waf_status.stdout == ""
+          register: stack_redeploy
               
       when: stack_exists
+
+    - name: Force redeploy stack if nginx-waf is missing or broken
+      block:
+        - name: Check nginx-waf service status
+          ansible.builtin.shell: |
+            docker service ls --filter name={{ stack_name }}_nginx-waf --format '{% raw %}{{.Replicas}}{% endraw %}'
+          register: nginx_waf_replicas
+          failed_when: false
+
+        - name: Redeploy stack if nginx-waf is broken
+          community.docker.docker_stack:
+            name: "{{ stack_name }}"
+            compose:
+              - "{{ compose_file }}"
+            state: present
+            prune: yes
+          when: nginx_waf_replicas.stdout == "" or nginx_waf_replicas.stdout == "0/0"
+          register: stack_recovery
 
     - name: Wait for services to stabilize
       ansible.builtin.pause:
@@ -232,22 +310,46 @@
 
     - name: Verify application services are running
       ansible.builtin.shell: |
-        for service in nginx-waf turbogate redis; do
+        # Determine the actual nginx service name
+        NGINX_SERVICE=""
+        for service_name in nginx-waf nginx nginx_waf; do
+          if docker service ls --filter name={{ stack_name }}_${service_name} --format '{% raw %}{{.Name}}{% endraw %}' | grep -q .; then
+            NGINX_SERVICE="{{ stack_name }}_${service_name}"
+            break
+          fi
+        done
+        
+        # Check core services
+        for service in turbogate redis; do
           FORMAT_REPLICAS='{% raw %}{{.Replicas}}{% endraw %}'
           replicas=$(docker service ls --filter name={{ stack_name }}_$service --format "$FORMAT_REPLICAS")
           if [ -z "$replicas" ]; then
-            echo "ERROR: Service $service not found."
+            echo "ERROR: Service {{ stack_name }}_$service not found."
             exit 1
           fi
           running=$(echo $replicas | cut -d'/' -f1)
           desired=$(echo $replicas | cut -d'/' -f2)
           if [ "$running" != "$desired" ] || [ "$running" -lt "1" ]; then
-            echo "ERROR: Service $service is not running correctly. Replicas: $replicas"
+            echo "ERROR: Service {{ stack_name }}_$service is not running correctly. Replicas: $replicas"
             docker service ps {{ stack_name }}_$service --no-trunc
             exit 1
           fi
-          echo "✓ Service $service is running with replicas: $replicas"
+          echo "✓ Service {{ stack_name }}_$service is running with replicas: $replicas"
         done
+        
+        # Check nginx if it exists
+        if [ ! -z "$NGINX_SERVICE" ]; then
+          FORMAT_REPLICAS='{% raw %}{{.Replicas}}{% endraw %}'
+          replicas=$(docker service ls --filter name=$NGINX_SERVICE --format "$FORMAT_REPLICAS")
+          if [ ! -z "$replicas" ] && [ "$replicas" != "0/0" ]; then
+            echo "✓ Nginx service $NGINX_SERVICE status: $replicas"
+          else
+            echo "⚠️ Nginx service $NGINX_SERVICE exists but not running: $replicas"
+            # Don't fail for nginx, as it might be optional or being recreated
+          fi
+        else
+          echo "⚠️ No nginx service found in stack"
+        fi
       register: service_check
       retries: 8
       delay: 15

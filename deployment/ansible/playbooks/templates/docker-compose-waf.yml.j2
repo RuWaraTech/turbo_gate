@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   nginx-waf:
-    image: owasp/modsecurity:nginx-alpine
+    image: owasp/modsecurity-crs:nginx-alpine
     deploy:
       mode: global
       update_config:
