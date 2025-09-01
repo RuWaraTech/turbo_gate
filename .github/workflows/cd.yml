@@ -340,23 +340,36 @@ jobs:
         continue-on-error: true
 
         
-      
-      # - name: Setup SSL Synchronization (if needed)
-      #   working-directory: deployment/ansible
-      #   env:
-      #     ANSIBLE_HOST_KEY_CHECKING: False
-      #   run: |
-      #     # Check if certificates exist on all nodes
-      #     if ! ansible all -i inventory/production.yml -m stat -a "path=/etc/letsencrypt/live/${{ secrets.DOMAIN_NAME }}/fullchain.pem" | grep -q "exists.*true"; then
-      #       echo "Running SSL sync setup..."
-      #       ansible-playbook -i inventory/production.yml playbooks/setup_ssl_sync.yml \
-      #         -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
-      #         -e "admin_email=${{ secrets.ADMIN_EMAIL }}" \
-      #         -vvv
-      #     else
-      #       echo "SSL certificates already synced"
-      #     fi
-
+      - name: Validate GitHub secrets
+        run: |
+          echo "Checking required secrets..."
+          
+          if [ -z "${{ secrets.SECRET_KEY }}" ]; then
+            echo "❌ SECRET_KEY is not set or is empty"
+            exit 1
+          fi
+          
+          if [ ${#SECRET_KEY} -lt 32 ]; then
+            echo "❌ SECRET_KEY is too short (should be at least 32 characters)"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "❌ REDIS_PASSWORD is not set or is empty"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.DOMAIN_NAME }}" ]; then
+            echo "❌ DOMAIN_NAME is not set or is empty"  
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+  
       - name: Deploy Application with WAF
         working-directory: deployment/ansible
         env:
