@@ -3,6 +3,13 @@ version: '3.8'
 services:
   nginx-waf:
     image: owasp/modsecurity-crs:nginx-alpine
+    configs:
+      - source: nginx_backend_config_v{{ resource_version }}
+        target: /etc/nginx/templates/nginx.conf.template  # ← Change to templates directory
+      - source: modsecurity_config_v{{ resource_version }}
+        target: /etc/nginx/templates/modsecurity.d/main.conf.template  # ← Change to templates directory
+      - source: modsecurity_rules_v{{ resource_version }}
+        target: /etc/nginx/templates/modsecurity.d/custom_rules.conf.template  # ← Change to templates directory
     deploy:
       mode: global
       update_config:
