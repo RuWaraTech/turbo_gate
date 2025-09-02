@@ -4,11 +4,11 @@ services:
   nginx-waf:
     image: owasp/modsecurity-crs:nginx-alpine
     configs:
-      - source: nginx_backend_config
+      - source: nginx_backend_config_v{{ resource_version }}
         target: /etc/nginx/templates/nginx.conf.template  # This stays as template
-      - source: modsecurity_config
+      - source: modsecurity_config_v{{ resource_version }}
         target: /etc/nginx/modsecurity/main.conf  # ← Change to final location
-      - source: modsecurity_rules
+      - source: modsecurity_rules_v{{ resource_version }}
         target: /etc/nginx/modsecurity/custom_rules.conf  # ← Change to final location
     deploy:
       mode: global
@@ -53,9 +53,9 @@ services:
       - SSL_TERMINATED_AT=load_balancer
       - SECURE_COOKIES=true
     secrets:
-      - source: turbogate_secret_key
+      - source: turbogate_secret_key_v{{ resource_version }}
         target: SECRET_KEY
-      - source: redis_password
+      - source: redis_password_v{{ resource_version }}
         target: redis_password
     networks:
       - turbogate_backend
@@ -78,7 +78,7 @@ services:
           - node.role == manager
     command: ["redis-server", "--requirepass", "/run/secrets/redis_password"]
     secrets:
-      - source: redis_password
+      - source: redis_password_v{{ resource_version }}
         target: redis_password
     networks:
       - turbogate_database
@@ -109,15 +109,15 @@ networks:
     external: true
 
 configs:
-  nginx_backend_config:
+  nginx_backend_config_v{{ resource_version }}:
     external: true
-  modsecurity_config:
+  modsecurity_config_v{{ resource_version }}:
     external: true
-  modsecurity_rules:
+  modsecurity_rules_v{{ resource_version }}:
     external: true
 
 secrets:
-  turbogate_secret_key:
+  turbogate_secret_key_v{{ resource_version }}:
     external: true
-  redis_password:
+  redis_password_v{{ resource_version }}:
     external: true
