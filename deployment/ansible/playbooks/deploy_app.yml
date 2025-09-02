@@ -31,15 +31,15 @@
 
     - name: Create required directories on manager node
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ item.path }}"
         state: directory
-        owner: root
-        group: root
-        mode: '0755'
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
       loop:
-        - /opt/turbogate
-        - /var/log/turbogate
-        - /var/lib/turbogate/redis
+        - { path: "/opt/turbogate", owner: "root", group: "root", mode: "0755" }
+        - { path: "/var/log/turbogate", owner: "root", group: "root", mode: "0755" }
+        - { path: "/var/lib/turbogate/redis", owner: "999", group: "999", mode: "0755" }
 
     - name: Get the list of all swarm node hostnames
       ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}'
@@ -49,14 +49,18 @@
 
     - name: Create NGINX directories on ALL swarm nodes
       ansible.builtin.file:
-        path: "{{ item.1 }}"
+        path: "{{ item.1.path }}"
         state: directory
-        owner: root
-        group: root
-        mode: '0755'
+        owner: "{{ item.1.owner }}"
+        group: "{{ item.1.group }}"
+        mode: "{{ item.1.mode }}"
       delegate_to: "{{ item.0 }}"
       delegate_facts: true
-      loop: "{{ swarm_node_hostnames.stdout_lines | product(['/var/log/nginx/waf', '/var/cache/nginx']) | list }}"
+      loop: "{{ swarm_node_hostnames.stdout_lines | product(nginx_directories) | list }}"
+      vars:
+        nginx_directories:
+          - { path: "/var/log/nginx/waf", owner: "101", group: "101", mode: "0755" }
+          - { path: "/var/cache/nginx", owner: "101", group: "101", mode: "0755" }
 
     - name: Pre-pull required images on all nodes
       ansible.builtin.command: docker image pull {{ image }}

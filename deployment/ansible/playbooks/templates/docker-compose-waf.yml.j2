@@ -25,15 +25,9 @@ services:
         protocol: tcp
         mode: host
     volumes:
-      - nginx_waf_logs:/var/log/nginx
-      - /var/cache/nginx:/var/cache/nginx
-    command: >
-      sh -c "
-      mkdir -p /var/log/nginx &&
-      chown -R nginx:nginx /var/log/nginx &&
-      chmod 755 /var/log/nginx &&
-      exec /docker-entrypoint.sh nginx -g 'daemon off;'
-      "
+      - nginx_waf_logs:/var/log/nginx:Z
+      - nginx_cache:/var/cache/nginx:Z
+    user: "101:101"
     networks:
       - turbogate_frontend
       - turbogate_backend
@@ -83,7 +77,7 @@ services:
       placement:
         constraints: 
           - node.role == manager
-    command: ["redis-server", "--requirepass", "/run/secrets/redis_password"]
+    command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
     secrets:
       - source: redis_password_v{{ resource_version }}
         target: redis_password
@@ -92,7 +86,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "/run/secrets/redis_password", "ping"]
+      test: ["CMD", "sh", "-c", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -105,6 +99,8 @@ volumes:
       o: bind
       device: /var/lib/turbogate/redis
   nginx_waf_logs:
+    driver: local
+  nginx_cache:
     driver: local
 
 networks:
