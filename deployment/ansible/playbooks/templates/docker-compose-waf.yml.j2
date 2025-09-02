@@ -27,6 +27,13 @@ services:
     volumes:
       - nginx_waf_logs:/var/log/nginx
       - /var/cache/nginx:/var/cache/nginx
+    command: >
+      sh -c "
+      mkdir -p /var/log/nginx &&
+      chown -R nginx:nginx /var/log/nginx &&
+      chmod 755 /var/log/nginx &&
+      exec /docker-entrypoint.sh nginx -g 'daemon off;'
+      "
     networks:
       - turbogate_frontend
       - turbogate_backend
