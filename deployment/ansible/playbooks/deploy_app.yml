@@ -1,15 +1,11 @@
----
-- name: Deploy TurboGate Application with Zero Downtime
+- name: Deploy TurboGate with Load Balancer SSL Termination
   hosts: swarm_managers
   become: yes
   
   vars:
     stack_name: turbogate
-    compose_file: /opt/turbogate/docker-compose.yml
-    health_check_timeout: 120
-    deployment_timeout: 600
-    ssh_timeout: 300
-
+    compose_file: /opt/turbogate/docker-compose-waf.yml
+    
   tasks:
     - name: Validate required variables
       ansible.builtin.assert:
@@ -18,540 +14,229 @@
           - redis_password is defined
           - domain_name is defined
           - image_tag is defined
-        fail_msg: "Required variables (secret_key, redis_password, domain_name, image_tag) must be defined"
+          - ssl_certificate_type == "managed"
+        fail_msg: "Required variables must be defined and ssl_certificate_type must be 'managed' for LB SSL termination"
 
-    - name: Create application directories
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-      loop:
-        - /opt/turbogate
-        - /var/log/turbogate
-        - /var/lib/turbogate/redis
-        - /var/log/turbogate/nginx
-        - /var/cache/nginx
-        
-    - name: Set correct ownership for NGINX cache directory
-      ansible.builtin.file:
-        path: /var/cache/nginx
-        state: directory
-        owner: 101
-        group: 101
-        mode: '0755'
-        recurse: yes
-
-    # Pre-deployment health check with proper domain
-    - name: Check current deployment health
+    - name: Verify Load Balancer is reachable
       ansible.builtin.uri:
-        url: "https://{{ domain_name }}/gateway/health"
+        url: "https://{{ domain_name }}/lb-health"
         method: GET
-        status_code: [200, 404, 502, 503]
         timeout: 10
-        validate_certs: true
-      register: pre_deploy_health
-      failed_when: false
-      changed_when: false
+        validate_certs: yes
+        status_code: [200, 502, 503]
+      register: lb_ssl_check
+      retries: 10
+      delay: 30
+      until: lb_ssl_check.status != -1
 
-    - name: Display pre-deployment status
-      ansible.builtin.debug:
-        msg: "Current deployment status: {{ pre_deploy_health.status | default('Unknown') }}"
-
-    # IMPROVED ZERO-DOWNTIME SECRET MANAGEMENT
-    - name: Get current timestamp for versioning
-      ansible.builtin.set_fact:
-        secret_version: "{{ ansible_date_time.epoch }}"
-
-    - name: Check existing secrets
-      ansible.builtin.command: docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}'
-      register: existing_secrets
-      changed_when: false
-      failed_when: false
-
-    - name: Check if services are using old secrets
-      ansible.builtin.shell: |
-        STACK_NAME="{{ stack_name }}"
-        FORMAT_SECRETS='{% raw %}{{json .Spec.TaskTemplate.ContainerSpec.Secrets}}{% endraw %}'
-        docker service inspect "${STACK_NAME}_{{ item }}" --format "$FORMAT_SECRETS"
-      loop:
-        - turbogate
-        - redis
-      register: service_secrets
-      failed_when: false
-      changed_when: false
-      ignore_errors: yes
-
-    # Create new versioned secrets without removing old ones
-    - name: Create new versioned Docker secrets
-      ansible.builtin.shell: |
-        echo -n "{{ item.value }}" | docker secret create {{ item.name }}_v{{ secret_version }} -
-      loop:
-        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
-        - { name: "redis_password", value: "{{ redis_password }}" }
-      no_log: true
-      register: new_secret_creation
-
-    # If services exist and are using old secrets, update them to use new versioned secrets
-    - name: Update running services with new versioned secrets
-      block:
-        - name: Update turbogate service with new secrets
-          ansible.builtin.shell: |
-            STACK_NAME="{{ stack_name }}"
-            SECRET_VERSION="{{ secret_version }}"
-            docker service update \
-              --secret-rm turbogate_secret_key \
-              --secret-rm redis_password \
-              --secret-add source=turbogate_secret_key_v${SECRET_VERSION},target=turbogate_secret_key \
-              --secret-add source=redis_password_v${SECRET_VERSION},target=redis_password \
-              ${STACK_NAME}_turbogate
-          register: turbogate_update
-          failed_when: false
-          when: "'turbogate_turbogate' in existing_secrets.stdout or '{{ stack_name }}_turbogate' in existing_secrets.stdout"
-
-        - name: Update redis service with new secret
-          ansible.builtin.shell: |
-            STACK_NAME="{{ stack_name }}"
-            SECRET_VERSION="{{ secret_version }}"
-            docker service update \
-              --secret-rm redis_password \
-              --secret-add source=redis_password_v${SECRET_VERSION},target=redis_password \
-              ${STACK_NAME}_redis
-          register: redis_update
-          failed_when: false
-          when: "'turbogate_redis' in existing_secrets.stdout or '{{ stack_name }}_redis' in existing_secrets.stdout"
-
-        - name: Wait for service updates to complete
-          ansible.builtin.pause:
-            seconds: 30
-          when: turbogate_update is changed or redis_update is changed
-
-      when: service_secrets.results | length > 0 and service_secrets.results[0].rc == 0
-
-    # Clean up old unversioned secrets if they exist and are no longer in use
-    - name: Clean up old unversioned secrets
-      ansible.builtin.command: docker secret rm {{ item }}
-      loop:
-        - turbogate_secret_key
-        - redis_password
-      when: 
-        - item in existing_secrets.stdout_lines
-        - new_secret_creation is succeeded
-      failed_when: false
-      ignore_errors: yes
-
-    - name: Create secret aliases for compose file compatibility
-      ansible.builtin.shell: |
-        SECRET_NAME="{{ item.name }}"
-        SECRET_VALUE="{{ item.value }}"
-        FORMAT_NAME='{% raw %}{{.Name}}{% endraw %}'
-        if ! docker secret ls --format "$FORMAT_NAME" | grep -q "^${SECRET_NAME}$"; then
-          echo -n "$SECRET_VALUE" | docker secret create "$SECRET_NAME" -
-        fi
-      loop:
-        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
-        - { name: "redis_password", value: "{{ redis_password }}" }
-      no_log: true
-      failed_when: false
-
-    # IMPROVED NGINX CONFIG MANAGEMENT WITH VERSIONING
-    - name: Create NGINX configuration content
-      ansible.builtin.template:
-        src: nginx.conf.j2 
-        dest: /tmp/nginx.conf
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Check existing nginx configs
-      ansible.builtin.command: docker config ls --format '{{ "{{" }}.Name{{ "}}" }}'
-      register: existing_configs
-      changed_when: false
-      failed_when: false
-
-    - name: Create versioned NGINX config
-      ansible.builtin.command: docker config create nginx_config_v{{ secret_version }} /tmp/nginx.conf
-      register: nginx_config_creation
-
-    - name: Check if nginx service exists and uses old config
-      ansible.builtin.shell: |
-        STACK_NAME="{{ stack_name }}"
-        FORMAT_CONFIGS='{% raw %}{{json .Spec.TaskTemplate.ContainerSpec.Configs}}{% endraw %}'
-        docker service inspect "${STACK_NAME}_nginx" --format "$FORMAT_CONFIGS"
-      register: nginx_service_config
-      failed_when: false
-      changed_when: false
-      ignore_errors: yes
-
-    - name: Update nginx service with new versioned config
-      ansible.builtin.shell: |
-        STACK_NAME="{{ stack_name }}"
-        SECRET_VERSION="{{ secret_version }}"
-        docker service update \
-          --config-rm nginx_config \
-          --config-add source=nginx_config_v${SECRET_VERSION},target=/etc/nginx/nginx.conf \
-          ${STACK_NAME}_nginx
-      when: 
-        - nginx_service_config.rc == 0
-        - "'nginx_config' in nginx_service_config.stdout"
-      failed_when: false
-      register: nginx_config_update
-
-    - name: Wait for nginx config update to complete
-      ansible.builtin.pause:
-        seconds: 15
-      when: nginx_config_update is changed
-
-    - name: Clean up old unversioned nginx config
-      ansible.builtin.command: docker config rm nginx_config
-      when: 
-        - "'nginx_config' in existing_configs.stdout_lines"
-        - nginx_config_creation is succeeded
-      failed_when: false
-      ignore_errors: yes
-
-    - name: Create nginx config alias for new deployments
-      ansible.builtin.command: docker config create nginx_config /tmp/nginx.conf
-      when: "'nginx_config' not in existing_configs.stdout_lines"
-      failed_when: false
-      ignore_errors: yes
-
-    - name: Clean up temporary nginx config file
+    - name: Create required directories on manager node
       ansible.builtin.file:
-        path: /tmp/nginx.conf
-        state: absent
-    
-    - name: Verify overlay network exists
-      community.docker.docker_network:
-        name: turbogate_network
-        driver: overlay
-        attachable: yes
-        state: present
-    
-    - name: Create Docker Compose file
-      ansible.builtin.template:
-        src: docker-compose.yml.j2
-        dest: "{{ compose_file }}"
-        owner: root
-        group: root
-        mode: '0644'
-        backup: yes
-    
-    # Docker Swarm will automatically pull images during deployment
-    # No pre-pulling needed - this prevents SSH timeouts and unnecessary complexity
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "/opt/turbogate", owner: "root", group: "root", mode: "0755" }
+        - { path: "/var/log/turbogate", owner: "root", group: "root", mode: "0755" }
+        - { path: "/var/lib/turbogate/redis", owner: "999", group: "999", mode: "0755" }
+        - { path: "/var/log/nginx/waf", owner: "101", group: "101", mode: "0755" }
+        - { path: "/var/cache/nginx", owner: "101", group: "101", mode: "0755" }
 
-    # Check current stack state
-    - name: Check current stack status
-      ansible.builtin.command: docker stack ls --format '{{ "{{" }}.Name{{ "}}" }}'
+    - name: Get the list of all swarm node hostnames
+      ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}'
+      register: swarm_node_hostnames
+      changed_when: false
+      run_once: true
+
+    - name: Create NGINX directories on ALL swarm nodes
+      ansible.builtin.file:
+        path: "{{ item.1.path }}"
+        state: directory
+        owner: "{{ item.1.owner }}"
+        group: "{{ item.1.group }}"
+        mode: "{{ item.1.mode }}"
+      delegate_to: "{{ item.0 }}"
+      delegate_facts: true
+      loop: "{{ swarm_node_hostnames.stdout_lines | product(nginx_directories) | list }}"
+      vars:
+        nginx_directories:
+          - { path: "/var/log/nginx/waf", owner: "101", group: "101", mode: "0755" }
+          - { path: "/var/cache/nginx", owner: "101", group: "101", mode: "0755" }
+
+    - name: Pre-pull required images on all nodes
+      ansible.builtin.command: docker image pull {{ image }}
+      delegate_to: "{{ node_hostname }}"
+      loop: "{{ swarm_node_hostnames.stdout_lines | product(image_list) | list }}"
+      loop_control:
+        label: "{{ item.0 }}:{{ item.1 }}"
+      vars:
+        node_hostname: "{{ item.0 }}"
+        image: "{{ item.1 }}"
+        image_list:
+          - owasp/modsecurity-crs:nginx-alpine
+          - "{{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag | default('latest') }}"
+          - redis:7-alpine
+
+    # ===================================================================
+    # BEGIN: SIMPLIFIED SECRET & CONFIG MANAGEMENT (NON-VERSIONED)
+    # ===================================================================
+    - name: Check if stack already exists
+      ansible.builtin.command: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}'
       register: existing_stacks
       changed_when: false
-
-    - name: Get current service info if stack exists
-      ansible.builtin.shell: |
-        STACK_NAME="{{ stack_name }}"
-        FORMAT_IMAGE='{% raw %}{{.Spec.TaskTemplate.ContainerSpec.Image}}{% endraw %}'
-        docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_IMAGE"
-      register: current_image
-      when: stack_name in existing_stacks.stdout_lines
       failed_when: false
-      changed_when: false
 
-    - name: Display current vs new image
-      ansible.builtin.debug:
-        msg:
-          - "Current image: {{ current_image.stdout | default('None') }}"
-          - "New image: {{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}"
-      when: current_image is defined
+    - name: Set fact for stack existence
+      ansible.builtin.set_fact:
+        stack_exists: "{{ stack_name in existing_stacks.stdout_lines }}"
 
-    # Zero-downtime deployment strategy with better error handling
-    - name: Deploy or update Docker stack with zero downtime
-      block:
-        - name: Deploy Docker stack
-          community.docker.docker_stack:
-            name: "{{ stack_name }}"
-            compose:
-              - "{{ compose_file }}"
-            state: present
-            prune: yes
-          register: stack_deploy
-          timeout: "{{ deployment_timeout }}"
+    # --- SECRET MANAGEMENT ---
+    - name: Get current timestamp for versioning resources
+      ansible.builtin.set_fact:
+        resource_version: "{{ ansible_date_time.epoch }}"
+      run_once: true
 
-        - name: Wait for initial deployment to stabilize
-          ansible.builtin.pause:
-            seconds: 240
+    - name: Create new versioned Docker secrets
+      ansible.builtin.shell:
+        cmd: "echo -n \"{{ item.value }}\" | docker secret create {{ item.name }}_v{{ resource_version }} -"
+      loop:
+        - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
+        - { name: "redis_password", value: "{{ redis_password }}" }
+      no_log: true
 
-        - name: Monitor deployment progress with detailed logging
-          ansible.builtin.shell: |
-            set +e
-            echo "=== Checking Service Replicas ==="
-            
-            STACK_NAME="{{ stack_name }}"
-            FORMAT_REPLICAS='{% raw %}{{.Spec.Mode.Replicated.Replicas}}{% endraw %}'
-            FORMAT_SERVICE_REPLICAS='{% raw %}{{.Replicas}}{% endraw %}'
-            
-            TURBOGATE_DESIRED=$(docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_REPLICAS" 2>/dev/null)
-            REDIS_DESIRED=$(docker service inspect "${STACK_NAME}_redis" --format "$FORMAT_REPLICAS" 2>/dev/null)
-            NGINX_DESIRED=$(docker service inspect "${STACK_NAME}_nginx" --format "$FORMAT_REPLICAS" 2>/dev/null)
-            
-            TURBOGATE_DESIRED=${TURBOGATE_DESIRED:-3}
-            REDIS_DESIRED=${REDIS_DESIRED:-1}
-            NGINX_DESIRED=${NGINX_DESIRED:-2}
-            
-            echo "Desired replicas - TurboGate: $TURBOGATE_DESIRED, Redis: $REDIS_DESIRED, NGINX: $NGINX_DESIRED"
-            
-            TURBOGATE_STATUS=$(docker service ls --filter "name=${STACK_NAME}_turbogate" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
-            REDIS_STATUS=$(docker service ls --filter "name=${STACK_NAME}_redis" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
-            NGINX_STATUS=$(docker service ls --filter "name=${STACK_NAME}_nginx" --format "$FORMAT_SERVICE_REPLICAS" 2>/dev/null)
-            
-            echo "Service status - TurboGate: $TURBOGATE_STATUS, Redis: $REDIS_STATUS, NGINX: $NGINX_STATUS"
-            
-            TURBOGATE_RUNNING=$(echo "$TURBOGATE_STATUS" | cut -d'/' -f1)
-            REDIS_RUNNING=$(echo "$REDIS_STATUS" | cut -d'/' -f1)
-            NGINX_RUNNING=$(echo "$NGINX_STATUS" | cut -d'/' -f1)
-            
-            TURBOGATE_RUNNING=${TURBOGATE_RUNNING:-0}
-            REDIS_RUNNING=${REDIS_RUNNING:-0}
-            NGINX_RUNNING=${NGINX_RUNNING:-0}
-            
-            echo "Running replicas - TurboGate: $TURBOGATE_RUNNING, Redis: $REDIS_RUNNING, NGINX: $NGINX_RUNNING"
-            
-            if [ "$TURBOGATE_STATUS" = "${TURBOGATE_DESIRED}/${TURBOGATE_DESIRED}" ] && \
-               [ "$REDIS_STATUS" = "${REDIS_DESIRED}/${REDIS_DESIRED}" ] && \
-               [ "$NGINX_STATUS" = "${NGINX_DESIRED}/${NGINX_DESIRED}" ]; then
-              echo "SUCCESS: All services fully converged"
-              exit 0
-            elif [ "$TURBOGATE_RUNNING" -ge "1" ] && [ "$REDIS_RUNNING" -ge "1" ] && [ "$NGINX_RUNNING" -ge "1" ]; then
-              echo "PARTIAL: Services running but still converging"
-              exit 0
-            else
-              echo "WAITING: Services not yet ready"
-              exit 1
-            fi
-          register: deployment_status
-          retries: 10
-          delay: 15
-          until: deployment_status.rc == 0
-          failed_when: deployment_status.rc != 0
+    # --- CONFIG MANAGEMENT ---
+    - name: Create versioned config files from templates
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "/tmp/{{ item.dest }}_{{ resource_version }}"
+        mode: '0644'
+      loop:
+        - { src: "templates/modsecurity.conf.j2", dest: "modsecurity.conf" }
+        - { src: "templates/modsecurity_rules.conf.j2", dest: "modsecurity_rules.conf" }
+        - { src: "templates/nginx-waf.conf.j2", dest: "nginx-waf.conf" }
 
-      rescue:
-        - name: Deployment monitoring timed out or failed
-          ansible.builtin.debug:
-            msg: "Deployment monitoring failed - checking actual service state"
-        
-        - name: Check actual service state before rollback
-          ansible.builtin.shell: |
-            STACK_NAME="{{ stack_name }}"
-            FORMAT_SERVICE_REPLICAS='{% raw %}{{.Replicas}}{% endraw %}'
-            echo "=== Actual Service State ==="
-            docker service ls --filter "name=${STACK_NAME}_"
-            echo ""
-            echo "=== Service Details ==="
-            TURBOGATE_STATUS=$(docker service ls --filter "name=${STACK_NAME}_turbogate" --format "$FORMAT_SERVICE_REPLICAS")
-            REDIS_STATUS=$(docker service ls --filter "name=${STACK_NAME}_redis" --format "$FORMAT_SERVICE_REPLICAS")
-            NGINX_STATUS=$(docker service ls --filter "name=${STACK_NAME}_nginx" --format "$FORMAT_SERVICE_REPLICAS")
-            
-            echo "TurboGate: $TURBOGATE_STATUS"
-            echo "Redis: $REDIS_STATUS"
-            echo "NGINX: $NGINX_STATUS"
-            
-            if [[ "$TURBOGATE_STATUS" == *"/"* ]] && [[ "$REDIS_STATUS" == *"/"* ]] && [[ "$NGINX_STATUS" == *"/"* ]]; then
-              TURBOGATE_RUNNING=$(echo "$TURBOGATE_STATUS" | cut -d'/' -f1)
-              if [ "$TURBOGATE_RUNNING" -ge "1" ]; then
-                echo "Services are actually running - no rollback needed"
-                exit 0
-              fi
-            fi
-            echo "Services appear to be failing - rollback may be needed"
-            exit 1
-          register: actual_state
-          failed_when: false
-        
-        - name: Display actual state
-          ansible.builtin.debug:
-            var: actual_state.stdout_lines
-        
-        - name: Skip rollback if services are healthy
-          ansible.builtin.meta: end_play
-          when: actual_state.rc == 0
-        
-        - name: Check if rollback is possible
-          ansible.builtin.shell: |
-            STACK_NAME="{{ stack_name }}"
-            FORMAT_PREVIOUS='{% raw %}{{.PreviousSpec}}{% endraw %}'
-            docker service inspect "${STACK_NAME}_turbogate" --format "$FORMAT_PREVIOUS"
-          register: previous_spec
-          failed_when: false
-          changed_when: false
-        
-        - name: Force rollback if previous spec exists
-          ansible.builtin.command: docker service rollback {{ stack_name }}_turbogate
-          when: previous_spec.stdout != '<no value>'
-          register: rollback_result
-          failed_when: false
-        
-        - name: Wait for rollback to complete
-          ansible.builtin.pause:
-            seconds: 60
-          when: rollback_result is changed
-            
-        - name: Report deployment status
-          ansible.builtin.fail:
-            msg: |
-              {% if actual_state.rc == 0 %}
-              Deployment monitoring timed out but services are healthy. Continuing...
-              {% else %}
-              Deployment failed. {% if rollback_result is changed %}Rollback completed.{% else %}No previous version to rollback to.{% endif %}
-              Check logs: docker service logs {{ stack_name }}_turbogate
-              {% endif %}
-          when: actual_state.rc != 0
+    - name: Create versioned Docker configs
+      ansible.builtin.command: docker config create {{ item.name }}_v{{ resource_version }} {{ item.path }}
+      loop:
+        - { name: "modsecurity_config", path: "/tmp/modsecurity.conf_{{ resource_version }}" }
+        - { name: "modsecurity_rules", path: "/tmp/modsecurity_rules.conf_{{ resource_version }}" }
+        - { name: "nginx_backend_config", path: "/tmp/nginx-waf.conf_{{ resource_version }}" }
+    # ===================================================================
+    # END: SIMPLIFIED SECRET & CONFIG MANAGEMENT
+    # ===================================================================
 
-    # Enhanced health verification with production certificates
-    - name: Wait for services to fully stabilize
+    - name: Create overlay networks if they do not exist
+      community.docker.docker_network:
+        name: "{{ item }}"
+        driver: overlay
+        attachable: yes
+      loop:
+        - turbogate_frontend
+        - turbogate_backend
+        - turbogate_database
+
+    - name: Create Docker Compose file from template for deployment
+      ansible.builtin.template:
+        src: docker-compose-waf.yml.j2
+        dest: "{{ compose_file }}"
+        mode: '0644'
+
+    - name: Deploy or update the Docker stack
+      community.docker.docker_stack:
+        name: "{{ stack_name }}"
+        state: present
+        compose:
+          - "{{ compose_file }}"
+        prune: yes
+        with_registry_auth: yes
+
+    - name: Wait for services to stabilize after deployment
       ansible.builtin.pause:
-        seconds: 30
+        seconds: 45
 
-    - name: Verify nginx container health directly
+    # ===================================================================
+    # BEGIN: CLEANUP OF OLD RESOURCES
+    # ===================================================================
+    - name: Get list of old secrets to remove
+      ansible.builtin.shell: "docker secret ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
+      register: old_secrets
+      loop:
+        - { name: "turbogate_secret_key" }
+        - { name: "redis_password" }
+      changed_when: false
+      failed_when: false
+      when: stack_exists
+
+    - name: Remove old versioned secrets
+      ansible.builtin.command: "docker secret rm {{ item }}"
+      loop: "{{ old_secrets.results | map(attribute='stdout_lines') | flatten }}"
+      when: stack_exists and old_secrets.results is defined and item != ""
+
+    - name: Get list of old configs to remove
+      ansible.builtin.shell: "docker config ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
+      register: old_configs
+      loop:
+        - { name: "modsecurity_config" }
+        - { name: "modsecurity_rules" }
+        - { name: "nginx_backend_config" }
+      changed_when: false
+      failed_when: false
+      when: stack_exists
+
+    - name: Remove old versioned configs
+      ansible.builtin.command: "docker config rm {{ item }}"
+      loop: "{{ old_configs.results | map(attribute='stdout_lines') | flatten }}"
+      when: stack_exists and old_configs.results is defined and item != ""
+
+    - name: Clean up temporary config files from manager
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "/tmp/modsecurity.conf_{{ resource_version }}"
+        - "/tmp/modsecurity_rules.conf_{{ resource_version }}"
+        - "/tmp/nginx-waf.conf_{{ resource_version }}"
+    # ===================================================================
+    # END: CLEANUP
+    # ===================================================================
+
+    - name: Verify nginx-waf service is running properly
       ansible.builtin.shell: |
-        STACK_NAME="{{ stack_name }}"
-        NGINX_CONTAINER=$(docker ps -q -f name=${STACK_NAME}_nginx --filter status=running | head -1)
-        if [ ! -z "$NGINX_CONTAINER" ]; then
-          docker exec $NGINX_CONTAINER curl -f http://localhost/lb-health
-        else
-          echo "No running nginx container found"
+        replicas=$(docker service ls --filter name={{ stack_name }}_nginx-waf --format '{{ '{{' }}.Replicas{{ '}}' }}')
+        if [ -z "$replicas" ]; then
+          echo "ERROR: nginx-waf service not found"
           exit 1
         fi
-      register: nginx_internal_health
-      retries: 5
+        running=$(echo $replicas | cut -d'/' -f1)
+        desired=$(echo $replicas | cut -d'/' -f2)
+        if [ "$running" != "$desired" ] || [ "$running" -lt "1" ]; then
+          echo "ERROR: nginx-waf service not running properly. Replicas: $replicas"
+          docker service ps {{ stack_name }}_nginx-waf --no-trunc
+          exit 1
+        fi
+        echo "✅ nginx-waf service running with replicas: $replicas"
+      register: nginx_service_check
+      retries: 6
       delay: 10
-      until: nginx_internal_health.rc == 0
-      failed_when: false
+      until: nginx_service_check.rc == 0
 
-    - name: Verify service health via domain (HTTPS with production certs)
+    - name: Final health check via Load Balancer
       ansible.builtin.uri:
         url: "https://{{ domain_name }}/health"
         method: GET
         status_code: 200
         timeout: 15
-        validate_certs: true
-      register: domain_health_check
-      retries: 10
+        validate_certs: yes
+      register: lb_https_health
+      retries: 12
       delay: 15
-      until: domain_health_check.status == 200
-      failed_when: false
+      until: lb_https_health.status == 200
 
-    - name: Verify gateway endpoint via domain
-      ansible.builtin.uri:
-        url: "https://{{ domain_name }}/gateway/health"
-        method: GET
-        status_code: 200
-        timeout: 15
-        validate_certs: true
-      register: gateway_health_check
-      retries: 5
-      delay: 10
-      until: gateway_health_check.status == 200
-      failed_when: false
-
-    - name: Verify load balancer health endpoint
-      ansible.builtin.uri:
-        url: "https://{{ domain_name }}/lb-health"
-        method: GET
-        status_code: 200
-        timeout: 10
-        validate_certs: true
-      register: lb_health_check
-      retries: 3
-      delay: 5
-      until: lb_health_check.status == 200
-      failed_when: false
-
-    # Cleanup old versioned secrets after successful deployment
-    - name: List all secrets for cleanup
-      ansible.builtin.command: docker secret ls --format '{{ "{{" }}.Name{{ "}}" }}'
-      register: all_secrets_post_deploy
-      changed_when: false
-      when: 
-        - domain_health_check.status == 200
-        - gateway_health_check.status == 200
-
-    - name: Clean up old versioned secrets (keep only current version)
-      ansible.builtin.command: docker secret rm {{ item }}
-      loop: "{{ all_secrets_post_deploy.stdout_lines | default([]) }}"
-      when:
-        - all_secrets_post_deploy is defined
-        - all_secrets_post_deploy.stdout_lines is defined
-        - item is regex('^(turbogate_secret_key|redis_password)_v[0-9]+$')
-        - item != 'turbogate_secret_key_v' + secret_version
-        - item != 'redis_password_v' + secret_version
-      failed_when: false
-      ignore_errors: yes
-
-    - name: List all configs for cleanup
-      ansible.builtin.command: docker config ls --format '{{ "{{" }}.Name{{ "}}" }}'
-      register: all_configs_post_deploy
-      changed_when: false
-      when: 
-        - domain_health_check.status == 200
-        - gateway_health_check.status == 200
-
-    - name: Clean up old versioned nginx configs (keep only current version)
-      ansible.builtin.command: docker config rm {{ item }}
-      loop: "{{ all_configs_post_deploy.stdout_lines | default([]) }}"
-      when:
-        - all_configs_post_deploy is defined
-        - all_configs_post_deploy.stdout_lines is defined
-        - item is regex('^nginx_config_v[0-9]+$')
-        - item != 'nginx_config_v' + secret_version
-      failed_when: false
-      ignore_errors: yes
-
-    # Post-deployment verification and reporting
-    - name: Get comprehensive service status
-      ansible.builtin.shell: |
-        STACK_NAME="{{ stack_name }}"
-        FORMAT_TABLE='{% raw %}table {{.Name}}\t{{.Node}}\t{{.CurrentState}}\t{{.DesiredState}}{% endraw %}'
-        FORMAT_STATS='{% raw %}table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}{% endraw %}'
-        echo "=== Service Overview ==="
-        docker service ls --filter "name=${STACK_NAME}_"
-        echo ""
-        echo "=== TurboGate Service Tasks ==="
-        docker service ps "${STACK_NAME}_turbogate" --no-trunc --format "$FORMAT_TABLE"
-        echo ""
-        echo "=== NGINX Service Tasks ==="
-        docker service ps "${STACK_NAME}_nginx" --no-trunc --format "$FORMAT_TABLE"
-        echo ""
-        echo "=== Redis Service Tasks ==="
-        docker service ps "${STACK_NAME}_redis" --no-trunc --format "$FORMAT_TABLE"
-        echo ""
-        echo "=== Resource Usage ==="
-        docker stats --no-stream --format "$FORMAT_STATS" || echo "Stats not available"
-      register: detailed_status
-      changed_when: false
-    
-    - name: Display detailed service status
+    - name: Display deployment summary
       ansible.builtin.debug:
-        var: detailed_status.stdout_lines
-
-    - name: Final deployment verification
-      ansible.builtin.assert:
-        that:
-          - deployment_status.rc in [0, 2]
-          - domain_health_check.status == 200
-          - gateway_health_check.status == 200
-          - nginx_internal_health.rc == 0
-        fail_msg: "Deployment verification failed. Health checks: nginx_internal={{ nginx_internal_health.rc | default('failed') }}, domain={{ domain_health_check.status | default('failed') }}, gateway={{ gateway_health_check.status | default('failed') }}"
-        success_msg: "Zero-downtime deployment completed successfully with production SSL certificates!"
-
-    - name: Deployment summary
-      ansible.builtin.debug:
-        msg:
-          - "=== DEPLOYMENT COMPLETED ==="
-          - "Stack: {{ stack_name }}"
-          - "Image: {{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}"
-          - "Domain: {{ domain_name }}"
-          - "SSL Status: Production certificates (trusted)"
-          - "Health Status - Domain: {{ domain_health_check.status | default('N/A') }}, Gateway: {{ gateway_health_check.status | default('N/A') }}"
-          - "NGINX Internal: {{ 'OK' if nginx_internal_health.rc == 0 else 'Failed' }}"
-          - "Monitor logs: docker service logs {{ stack_name }}_turbogate --follow"
-          - "Service status: docker service ls --filter name={{ stack_name }}_"
+        msg: |
+          ✅ DEPLOYMENT COMPLETE ✅
+          Stack: {{ stack_name }}
+          Domain: https://{{ domain_name }}
+          Deployment Type: {{ 'New Deployment' if not stack_exists else 'Rolling Update' }}

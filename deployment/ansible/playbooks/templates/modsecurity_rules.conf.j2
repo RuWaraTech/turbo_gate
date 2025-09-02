@@ -1,0 +1,37 @@
+# Custom ModSecurity Rules for TurboGate
+# This file contains your custom security rules
+
+# Basic security rules
+SecRule REQUEST_HEADERS:User-Agent "@pm scan bot crawler spider" \
+    "id:1000,phase:1,deny,status:403,msg:'Malicious User-Agent detected',logdata:'%{MATCHED_VAR}'"
+
+SecRule REQUEST_HEADERS:Content-Type "!@streq application/x-www-form-urlencoded" \
+    "id:1001,phase:1,pass,msg:'Non-standard Content-Type'"
+
+# SQL Injection detection
+SecRule ARGS|ARGS_NAMES "@detectSQLi" \
+    "id:1002,phase:2,block,msg:'SQL Injection Attempt',tag:'WEB_ATTACK/SQL_INJECTION'"
+
+# XSS detection
+SecRule ARGS|ARGS_NAMES "@detectXSS" \
+    "id:1003,phase:2,block,msg:'XSS Attempt',tag:'WEB_ATTACK/XSS'"
+
+# File inclusion attempts
+SecRule ARGS "@contains /etc/passwd" \
+    "id:1004,phase:2,block,msg:'Local File Inclusion Attempt'"
+
+SecRule ARGS "@contains .." \
+    "id:1005,phase:2,block,msg:'Path Traversal Attempt'"
+
+# Rate limiting for health checks
+SecRule REQUEST_URI "@streq /health" \
+    "id:1006,phase:1,pass,nolog,ctl:ruleEngine=Off"
+
+SecRule REQUEST_URI "@streq /lb-health" \
+    "id:1007,phase:1,pass,nolog,ctl:ruleEngine=Off"
+
+{% if modsecurity_custom_rules is defined %}
+{% for rule in modsecurity_custom_rules %}
+{{ rule }}
+{% endfor %}
+{% endif %}

@@ -5,6 +5,7 @@ This package provides a productionAPI Gateway built specifically
 for the Land & House Title Verification platform.
 """
 
+
 __version__ = "0.0.1"
 __author__ = "Farai Wande"
 __email__ = "faraiwande@gmail.com"

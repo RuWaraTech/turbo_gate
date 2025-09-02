@@ -1,5 +1,5 @@
 - name: Setup Docker Swarm Cluster on Hetzner Cloud
-  hosts: all
+  hosts: swarm_managers:swarm_workers
   become: yes
   gather_facts: yes
   vars:
@@ -22,7 +22,81 @@
           - netcat
           - jq
         state: present
-    
+
+    # Wait for cloud-init/user_data to complete
+    - name: Wait for node initialization to complete
+      ansible.builtin.wait_for:
+        path: /tmp/node-init-complete
+        timeout: 300
+      register: init_complete
+      failed_when: false
+
+    - name: Fallback wait if marker doesn't exist
+      ansible.builtin.pause:
+        seconds: 60
+      when: init_complete is failed
+
+    - name: Check if security hardening was applied during provisioning
+      ansible.builtin.stat:
+        path: /tmp/security-hardening-started
+      register: hardening_marker
+
+    - name: Read node information from provisioning
+      ansible.builtin.slurp:
+        src: /tmp/node-info
+      register: node_info_content
+      when: hardening_marker.stat.exists
+
+    - name: Parse node information
+      ansible.builtin.set_fact:
+        node_security_enabled: "{{ (node_info_content.content | b64decode | regex_search('SECURITY_HARDENING=true')) != None }}"
+      when: hardening_marker.stat.exists
+
+    - name: Set default security status if marker missing
+      ansible.builtin.set_fact:
+        node_security_enabled: false
+      when: not hardening_marker.stat.exists
+
+    # Verify fail2ban installation from Terraform provisioning
+    - name: Check if fail2ban binary exists
+      ansible.builtin.command: which fail2ban-client
+      register: fail2ban_binary
+      failed_when: false
+      changed_when: false
+
+    - name: Wait for fail2ban service to be registered (if installed)
+      ansible.builtin.wait_for:
+        path: /etc/systemd/system/multi-user.target.wants/fail2ban.service
+        timeout: 60
+      when: 
+        - node_security_enabled | bool
+        - fail2ban_binary.rc == 0
+      ignore_errors: yes
+
+    - name: Force systemd to reload if fail2ban was just installed
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      when: 
+        - node_security_enabled | bool
+        - fail2ban_binary.rc == 0
+
+    - name: Ensure fail2ban service is running (if installed)
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: started
+        enabled: yes
+      when: 
+        - node_security_enabled | bool
+        - fail2ban_binary.rc == 0
+      register: fail2ban_service_start
+      failed_when: false
+
+    - name: Wait for fail2ban to be fully operational
+      ansible.builtin.pause:
+        seconds: 10
+      when: 
+        - node_security_enabled | bool
+        - fail2ban_service_start is succeeded
 
     - name: Check if Docker is already installed
       ansible.builtin.command: docker --version
@@ -78,7 +152,7 @@
       register: ping_test
       changed_when: false
       failed_when: false
-      when: "'workers' in group_names"
+      when: "'swarm_workers' in group_names" 
 
     - name: Initialize swarm on manager
       community.docker.docker_swarm:
@@ -115,7 +189,7 @@
       ansible.builtin.command: >
         timeout 30 bash -c 'until nc -z {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }} 2377; do sleep 2; done'
       register: port_test
-      when: "'workers' in group_names"
+      when: "'swarm_workers' in group_names"
       failed_when: false
       changed_when: false
 
@@ -128,7 +202,7 @@
           - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
         timeout: 60
       when:
-        - "'workers' in group_names"
+        - "'swarm_workers' in group_names"
         - swarm_state.stdout == "inactive"
         - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined
       register: join_result
@@ -161,14 +235,127 @@
       when: "'swarm_managers' in group_names"
       run_once: true
 
-    - name: Label nodes
+    - name: Create encrypted overlay networks with security
+      community.docker.docker_network:
+        name: "turbogate_{{ item.key }}"
+        driver: overlay
+        attachable: yes
+        driver_options:
+          encrypted: "{{ item.value.encrypted | string }}"
+        ipam_config:
+          - subnet: "{{ item.value.subnet }}"
+        labels:
+          security_zone: "{{ item.key }}"
+          encrypted: "{{ item.value.encrypted | string }}"
+          managed_by: "ansible"
+      loop: "{{ swarm_networks | dict2items }}"
+      when: 
+        - "'swarm_managers' in group_names"
+        - swarm_encryption_enabled | default(true)
+      run_once: true
+
+    - name: Label nodes with security context
       community.docker.docker_node:
         hostname: "{{ ansible_hostname }}"
         labels:
           role: "{{ 'manager' if 'swarm_managers' in group_names else 'worker' }}"
           app: "turbogate"
           environment: "production"
+          security_hardened: "{{ node_security_enabled | string }}"
+          security_zone: "{{ 'dmz' if 'swarm_managers' in group_names else 'internal' }}"
+          fail2ban_enabled: "{{ node_security_enabled | string }}"
+          network_segment: "{{ 'management' if 'swarm_managers' in group_names else 'application' }}"
       delegate_to: "{{ groups['swarm_managers'][0] }}"
+
+    # Security verification tasks - FIXED to handle missing fail2ban gracefully
+    - name: Verify Docker daemon security configuration
+      shell: |
+        docker system info --format '{{ "{{" }}.SecurityOptions{{ "}}" }}' | grep -q "name=seccomp" && \
+        docker system info --format '{{ "{{" }}.LiveRestoreEnabled{{ "}}" }}' | grep -q "true"
+      register: docker_security_check
+      failed_when: false
+      changed_when: false
+      when: "'swarm_managers' in group_names"
+
+    - name: Check if fail2ban service exists
+      ansible.builtin.systemd:
+        name: fail2ban
+      register: fail2ban_service_check
+      failed_when: false
+      changed_when: false
+
+    - name: Verify fail2ban SSH protection is working (if service exists)
+      ansible.builtin.command: fail2ban-client status sshd
+      register: fail2ban_ssh_status
+      changed_when: false
+      failed_when: false
+      when: fail2ban_service_check.status.LoadState is defined and fail2ban_service_check.status.LoadState == "loaded"
+
+    - name: Verify SSH hardening configuration on all nodes
+      ansible.builtin.shell: |
+        grep -q "^PasswordAuthentication no" /etc/ssh/sshd_config && \
+        grep -q "^PermitRootLogin prohibit-password" /etc/ssh/sshd_config && \
+        grep -q "^X11Forwarding no" /etc/ssh/sshd_config
+      register: ssh_hardening_verify
+      failed_when: false
+
+    - name: Verify kernel hardening settings
+      ansible.builtin.shell: |
+        sysctl net.ipv4.ip_forward | grep -q "= 1" && \
+        sysctl net.ipv4.tcp_syncookies | grep -q "= 1"
+      register: kernel_hardening_verify
+      failed_when: false
+
+    - name: Check IP forwarding status
+      ansible.builtin.command: sysctl -n net.ipv4.ip_forward
+      register: ip_forward_check
+      changed_when: false  
+
+    - name: Display individual node security status
+      ansible.builtin.debug:
+        msg: |
+          NODE: {{ inventory_hostname }} ({{ ansible_default_ipv4.address }})
+          ----------------------------------
+          Security Hardening: {{ 'ENABLED' if node_security_enabled else 'DISABLED' }}
+          Fail2Ban Service: {{ 'RUNNING' if (fail2ban_service_check.status.LoadState is defined and fail2ban_service_check.status.ActiveState == 'active') else 'NOT INSTALLED/INACTIVE' }}
+          Fail2Ban SSH Protection: {{ 'ACTIVE' if (fail2ban_ssh_status is succeeded and 'Currently banned:' in fail2ban_ssh_status.stdout) else 'INACTIVE/MISSING' }}
+          SSH Hardening: {{ 'COMPLETE' if ssh_hardening_verify.rc == 0 else 'INCOMPLETE' }}
+          Kernel Hardening: {{ 'APPLIED' if kernel_hardening_verify.rc == 0 else 'MISSING' }}
+      run_once: false
+
+    - name: Set node security status fact
+      ansible.builtin.set_fact:
+        node_secure: "{{ ssh_hardening_verify.rc == 0 and kernel_hardening_verify.rc == 0 }}"
+        fail2ban_secure: "{{ (fail2ban_service_check.status.LoadState is defined and fail2ban_service_check.status.ActiveState == 'active') if node_security_enabled else true }}"
+
+    - name: Display Docker security status
+      ansible.builtin.debug:
+        msg: 
+          - "Docker security features: {{ 'Enabled' if docker_security_check.rc == 0 else 'Needs attention' }}"
+          - "Swarm encryption: {{ 'Enabled' if swarm_encryption_enabled else 'Disabled' }}"
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    - name: Get detailed network information
+      community.docker.docker_network_info:
+        name: "turbogate_{{ item }}"
+      loop:
+        - frontend
+        - backend
+        - database
+      register: network_info
+      when: "'swarm_managers' in group_names"
+      run_once: true
+      failed_when: false  # Don't fail if networks don't exist yet
+
+    - name: Display network encryption status
+      ansible.builtin.debug:
+        msg: "Network {{ item.item }}: Encrypted={{ item.network.Options.encrypted | default('false') }}"
+      loop: "{{ network_info.results }}"
+      when: 
+        - "'swarm_managers' in group_names"
+        - item.network is defined
+      run_once: true
 
     - name: Final cluster status
       ansible.builtin.command: docker system info --format '{{ '{{' }}.Swarm.Nodes{{ '}}' }} nodes in swarm'
@@ -178,5 +365,15 @@
 
     - name: Success message
       ansible.builtin.debug:
-        msg: "✅ Docker Swarm cluster setup completed successfully! {{ final_status.stdout if final_status is defined else '' }}"
+        msg: |
+          ✅ Docker Swarm cluster setup completed successfully! 
+          {{ final_status.stdout if final_status is defined else '' }}
+          Security hardening: {{ 'Applied' if node_security_enabled else 'Disabled' }}
       run_once: true
+
+  handlers:
+    - name: restart fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+      when: node_security_enabled | bool

@@ -41,10 +41,12 @@ RUN poetry install --no-ansi --no-interaction --only-root
 # Stage 2: Test Stage
 FROM python:3.13-slim AS test
 
-# Set environment variables
+# Set environment variables - INCLUDING POETRY CONFIG
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH=/opt/poetry/bin:$PATH
+    PATH=/opt/poetry/bin:$PATH \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_CREATE=false
 
 # Copy Poetry and all dependencies from base stage
 COPY --from=base /opt/poetry /opt/poetry
@@ -70,10 +72,14 @@ CMD ["--cov=gateway_service", "--cov-report=term-missing", "--cov-report=html", 
 # Stage 3: Production Stage
 FROM python:3.13-slim AS prod
 
-# Set environment variables
+# Set environment variables - INCLUDING POETRY CONFIG
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PATH=/opt/poetry/bin:$PATH
+    PATH=/opt/poetry/bin:$PATH \
+    POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_CREATE=false \
+    POETRY_CACHE_DIR=/tmp/poetry-cache \
+    POETRY_VENV_IN_PROJECT=false
 
 # Install curl for health checks and create non-root user
 RUN apt-get update \

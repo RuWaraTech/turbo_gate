@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  nginx-waf:
+    image: owasp/modsecurity-crs:nginx-alpine
+    configs:
+      - source: nginx_backend_config_v{{ resource_version }}
+        target: /etc/nginx/templates/nginx.conf.template  # This stays as template
+      - source: modsecurity_config_v{{ resource_version }}
+        target: /etc/nginx/modsecurity/main.conf  # ← Change to final location
+      - source: modsecurity_rules_v{{ resource_version }}
+        target: /etc/nginx/modsecurity/custom_rules.conf  # ← Change to final location
+    tmpfs:
+      - /tmp:uid=101,gid=101,mode=755
+      - /run:uid=101,gid=101,mode=755
+    deploy:
+      mode: global
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+    volumes:
+      - nginx_waf_logs:/var/log/nginx:Z
+      - nginx_cache:/var/cache/nginx:Z
+    networks:
+      - turbogate_frontend
+      - turbogate_backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:80/lb-health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  turbogate:
+    image: {{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag | default('latest') }}
+    deploy:
+      replicas: {{ app_replicas | default(3) }}
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+    environment:
+      - FLASK_ENV=prod
+      - SSL_TERMINATED_AT=load_balancer
+      - SECURE_COOKIES=true
+    secrets:
+      - source: turbogate_secret_key_v{{ resource_version }}
+        target: SECRET_KEY
+      - source: redis_password_v{{ resource_version }}
+        target: redis_password
+    networks:
+      - turbogate_backend
+      - turbogate_database
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    deploy:
+      replicas: 1
+      placement:
+        constraints: 
+          - node.role == manager
+    command: sh -c 'redis-server --requirepass "$$(cat /run/secrets/redis_password)"'
+    secrets:
+      - source: redis_password_v{{ resource_version }}
+        target: redis_password
+    networks:
+      - turbogate_database
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  redis_data:
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/turbogate/redis
+  nginx_waf_logs:
+    driver: local
+  nginx_cache:
+    driver: local
+
+networks:
+  turbogate_frontend:
+    external: true
+  turbogate_backend:
+    external: true  
+  turbogate_database:
+    external: true
+
+configs:
+  nginx_backend_config_v{{ resource_version }}:
+    external: true
+  modsecurity_config_v{{ resource_version }}:
+    external: true
+  modsecurity_rules_v{{ resource_version }}:
+    external: true
+
+secrets:
+  turbogate_secret_key_v{{ resource_version }}:
+    external: true
+  redis_password_v{{ resource_version }}:
+    external: true
