@@ -41,9 +41,6 @@
         - /var/log/turbogate
         - /var/lib/turbogate/redis
 
-    # ===================================================================
-    # BEGIN: RELIABLE DIRECTORY CREATION ON ALL SWARM NODES
-    # ===================================================================
     - name: Get the list of all swarm node hostnames
       ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}'
       register: swarm_node_hostnames
@@ -60,9 +57,6 @@
       delegate_to: "{{ item.0 }}"
       delegate_facts: true
       loop: "{{ swarm_node_hostnames.stdout_lines | product(['/var/log/nginx/waf', '/var/cache/nginx']) | list }}"
-    # ===================================================================
-    # END: RELIABLE DIRECTORY CREATION
-    # ===================================================================
 
     - name: Pre-pull required images on all nodes
       ansible.builtin.command: docker image pull {{ image }}
@@ -79,13 +73,8 @@
           - redis:7-alpine
 
     # ===================================================================
-    # BEGIN: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
+    # BEGIN: SIMPLIFIED SECRET & CONFIG MANAGEMENT (NON-VERSIONED)
     # ===================================================================
-    - name: Get current timestamp for versioning resources
-      ansible.builtin.set_fact:
-        resource_version: "{{ ansible_date_time.epoch }}"
-      run_once: true
-
     - name: Check if stack already exists
       ansible.builtin.command: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}'
       register: existing_stacks
@@ -97,36 +86,50 @@
         stack_exists: "{{ stack_name in existing_stacks.stdout_lines }}"
 
     # --- SECRET MANAGEMENT ---
-    - name: Create new versioned Docker secrets
+    - name: Create or update Docker secrets (non-versioned)
       ansible.builtin.shell:
-        cmd: "echo -n \"{{ item.value }}\" | docker secret create {{ item.name }}_v{{ resource_version }} -"
+        cmd: |
+          if docker secret inspect {{ item.name }} >/dev/null 2>&1; then
+            echo "Updating existing secret {{ item.name }}"
+            echo -n "{{ item.value }}" | docker secret update {{ item.name }} -
+          else
+            echo "Creating new secret {{ item.name }}"
+            echo -n "{{ item.value }}" | docker secret create {{ item.name }} -
+          fi
       loop:
         - { name: "turbogate_secret_key", value: "{{ secret_key }}" }
         - { name: "redis_password", value: "{{ redis_password }}" }
       no_log: true
-      when: stack_exists
+      register: secret_management
+      failed_when: secret_management.rc != 0
 
     # --- CONFIG MANAGEMENT ---
-    - name: Create versioned ModSecurity and NGINX configs from templates
+    - name: Create config files from templates
       ansible.builtin.template:
         src: "{{ item.src }}"
-        dest: "/tmp/{{ item.dest }}_{{ resource_version }}"
+        dest: "/tmp/{{ item.dest }}"
         mode: '0644'
       loop:
         - { src: "templates/modsecurity.conf.j2", dest: "modsecurity.conf" }
         - { src: "templates/modsecurity_rules.conf.j2", dest: "modsecurity_rules.conf" }
         - { src: "templates/nginx-waf.conf.j2", dest: "nginx-waf.conf" }
 
-    - name: Create versioned Docker configs
-      ansible.builtin.command: docker config create {{ item.name }}_v{{ resource_version }} {{ item.path }}
+    - name: Create or update Docker configs (non-versioned)
+      ansible.builtin.shell:
+        cmd: |
+          if docker config inspect {{ item.name }} >/dev/null 2>&1; then
+            echo "Removing existing config {{ item.name }}"
+            docker config rm {{ item.name }}
+          fi
+          echo "Creating config {{ item.name }}"
+          docker config create {{ item.name }} {{ item.path }}
       loop:
-        - { name: "modsecurity_config", path: "/tmp/modsecurity.conf_{{ resource_version }}" }
-        - { name: "modsecurity_rules", path: "/tmp/modsecurity_rules.conf_{{ resource_version }}" }
-        - { name: "nginx_backend_config", path: "/tmp/nginx-waf.conf_{{ resource_version }}" }
-      when: stack_exists
-
+        - { name: "nginx_backend_config", path: "/tmp/nginx-waf.conf" }
+        - { name: "modsecurity_config", path: "/tmp/modsecurity.conf" }
+        - { name: "modsecurity_rules", path: "/tmp/modsecurity_rules.conf" }
+      register: config_management
     # ===================================================================
-    # END: ZERO-DOWNTIME SECRET & CONFIG MANAGEMENT
+    # END: SIMPLIFIED SECRET & CONFIG MANAGEMENT
     # ===================================================================
 
     - name: Create overlay networks if they do not exist
@@ -159,45 +162,16 @@
         seconds: 45
 
     # ===================================================================
-    # BEGIN: CLEANUP OF OLD RESOURCES
+    # BEGIN: CLEANUP
     # ===================================================================
-    - name: Get list of old secrets to remove
-      ansible.builtin.shell: "docker secret ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
-      register: old_secrets
-      loop:
-        - { name: "turbogate_secret_key" }
-        - { name: "redis_password" }
-      changed_when: false
-      when: stack_exists
-
-    - name: Remove old versioned secrets
-      ansible.builtin.command: "docker secret rm {{ item }}"
-      loop: "{{ old_secrets.results | map(attribute='stdout_lines') | flatten }}"
-      when: stack_exists and old_secrets.results is defined
-
-    - name: Get list of old configs to remove
-      ansible.builtin.shell: "docker config ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
-      register: old_configs
-      loop:
-        - { name: "modsecurity_config" }
-        - { name: "modsecurity_rules" }
-        - { name: "nginx_backend_config" }
-      changed_when: false
-      when: stack_exists
-
-    - name: Remove old versioned configs
-      ansible.builtin.command: "docker config rm {{ item }}"
-      loop: "{{ old_configs.results | map(attribute='stdout_lines') | flatten }}"
-      when: stack_exists and old_configs.results is defined
-
     - name: Clean up temporary config files from manager
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
-        - "/tmp/modsecurity.conf_{{ resource_version }}"
-        - "/tmp/modsecurity_rules.conf_{{ resource_version }}"
-        - "/tmp/nginx-waf.conf_{{ resource_version }}"
+        - "/tmp/modsecurity.conf"
+        - "/tmp/modsecurity_rules.conf"
+        - "/tmp/nginx-waf.conf"
     # ===================================================================
     # END: CLEANUP
     # ===================================================================
@@ -240,5 +214,4 @@
           ✅ DEPLOYMENT COMPLETE ✅
           Stack: {{ stack_name }}
           Domain: https://{{ domain_name }}
-          Resource Version: {{ resource_version }}
           Deployment Type: {{ 'New Deployment' if not stack_exists else 'Rolling Update' }}

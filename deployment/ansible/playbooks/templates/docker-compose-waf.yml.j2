@@ -4,12 +4,12 @@ services:
   nginx-waf:
     image: owasp/modsecurity-crs:nginx-alpine
     configs:
-      - source: nginx_backend_config_v{{ resource_version }}
-        target: /etc/nginx/templates/nginx.conf.template  # ← Change to templates directory
-      - source: modsecurity_config_v{{ resource_version }}
-        target: /etc/nginx/templates/modsecurity.d/main.conf.template  # ← Change to templates directory
-      - source: modsecurity_rules_v{{ resource_version }}
-        target: /etc/nginx/templates/modsecurity.d/custom_rules.conf.template  # ← Change to templates directory
+      - source: nginx_backend_config
+        target: /etc/nginx/templates/nginx.conf.template
+      - source: modsecurity_config
+        target: /etc/nginx/templates/modsecurity.d/main.conf.template
+      - source: modsecurity_rules
+        target: /etc/nginx/templates/modsecurity.d/custom_rules.conf.template
     deploy:
       mode: global
       update_config:
@@ -25,7 +25,6 @@ services:
         protocol: tcp
         mode: host
     volumes:
-      # FIXED: Use named volume instead of bind mount
       - nginx_waf_logs:/var/log/nginx
       - /var/cache/nginx:/var/cache/nginx
     networks:
@@ -98,7 +97,6 @@ volumes:
       type: none
       o: bind
       device: /var/lib/turbogate/redis
-  # ADDED: Named volume for nginx WAF logs
   nginx_waf_logs:
     driver: local
 
