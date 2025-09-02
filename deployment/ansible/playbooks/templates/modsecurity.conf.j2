@@ -1,11 +1,11 @@
 # ModSecurity core configuration
 SecRuleEngine {{ modsecurity_rule_engine | default('On') }}
 SecAuditEngine RelevantOnly
-SecAuditLog /var/log/nginx/waf/modsec_audit.log
+SecAuditLog /var/log/nginx/modsec_audit.log
 SecAuditLogType Serial
-SecAuditLogStorageDir /var/log/nginx/waf/
+SecAuditLogStorageDir /var/log/nginx/
 SecAuditLogParts ABCEFHZ
-SecDebugLog /var/log/nginx/waf/modsec_debug.log
+SecDebugLog /var/log/nginx/modsec_debug.log
 SecDebugLogLevel {{ modsecurity_debug_level | default(0) }}
 
 # Request body handling
