@@ -40,6 +40,8 @@
         - { path: "/opt/turbogate", owner: "root", group: "root", mode: "0755" }
         - { path: "/var/log/turbogate", owner: "root", group: "root", mode: "0755" }
         - { path: "/var/lib/turbogate/redis", owner: "999", group: "999", mode: "0755" }
+        - { path: "/var/log/nginx/waf", owner: "101", group: "101", mode: "0755" }
+        - { path: "/var/cache/nginx", owner: "101", group: "101", mode: "0755" }
 
     - name: Get the list of all swarm node hostnames
       ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}'

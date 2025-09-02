@@ -27,7 +27,6 @@ services:
     volumes:
       - nginx_waf_logs:/var/log/nginx:Z
       - nginx_cache:/var/cache/nginx:Z
-    user: "101:101"
     networks:
       - turbogate_frontend
       - turbogate_backend

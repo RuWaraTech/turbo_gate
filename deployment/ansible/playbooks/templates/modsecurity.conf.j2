@@ -5,13 +5,11 @@ SecAuditLog /var/log/nginx/modsec_audit.log
 SecAuditLogType Serial
 SecAuditLogStorageDir /var/log/nginx/
 SecAuditLogParts ABCEFHZ
-SecDebugLog /var/log/nginx/modsec_debug.log
 SecDebugLogLevel {{ modsecurity_debug_level | default(0) }}
 
-# Request body handling
+# Request body handling (v3 compatible)
 SecRequestBodyLimit 13107200
 SecRequestBodyNoFilesLimit 131072
-SecRequestBodyInMemoryLimit 131072
 SecRequestBodyLimitAction Reject
 
 # Response body handling
