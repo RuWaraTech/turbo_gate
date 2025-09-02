@@ -10,6 +10,9 @@ services:
         target: /etc/nginx/modsecurity/main.conf  # ← Change to final location
       - source: modsecurity_rules_v{{ resource_version }}
         target: /etc/nginx/modsecurity/custom_rules.conf  # ← Change to final location
+    tmpfs:
+      - /tmp:uid=101,gid=101,mode=755
+      - /run:uid=101,gid=101,mode=755
     deploy:
       mode: global
       update_config:
