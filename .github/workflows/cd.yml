@@ -1,0 +1,570 @@
+name: Prod Deployment
+
+
+on:
+  workflow_run:
+    workflows: ["Bump Version and Create Release"]
+    types:
+      - completed
+    branches: [main]
+  
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: false
+        default: 'latest'
+      force_deployment:
+        description: 'Force deployment even if health checks fail'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  IMAGE_NAME: fwande/turbogate
+  DEPLOYMENT_TIMEOUT: 600  # Increased timeout for zero-downtime
+  HEALTH_CHECK_RETRIES: 20
+
+jobs:
+  pre-deploy-validation:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'}}
+    outputs:
+      should_deploy: ${{ steps.validation.outputs.should_deploy }}
+      image_tag: ${{ steps.tag.outputs.image_tag }}
+      version_tag: ${{ steps.version.outputs.version_tag }}
+      current_deployment_health: ${{ steps.health.outputs.status }}
+    
+    steps:
+      - name: Validate deployment conditions
+        id: validation
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "Manual deployment triggered"
+          elif [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]]; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "Version bump completed, proceeding with deployment"
+          else
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            echo "Prerequisites not met, skipping deployment"
+          fi
+      
+      - name: Checkout for version detection
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Get latest version tag
+        id: version
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "version_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest version tag: $LATEST_TAG"
+      
+      - name: Determine image tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            VERSION_TAG="${{ steps.version.outputs.version_tag }}"
+            CLEAN_VERSION=${VERSION_TAG#v}
+            echo "image_tag=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+            echo "Using version tag: $CLEAN_VERSION"
+          fi
+
+      - name: Check current deployment health
+        id: health
+        run: |
+          # Try to check current deployment health
+          if curl -sSf --max-time 10 "https://${{ secrets.DOMAIN_NAME }}/health" > /dev/null 2>&1; then
+            echo "status=healthy" >> $GITHUB_OUTPUT
+            echo "Current deployment is healthy"
+          else
+            echo "status=unhealthy" >> $GITHUB_OUTPUT
+            echo "Current deployment is unhealthy or doesn't exist"
+          fi
+        continue-on-error: true
+
+  build-and-push:
+    needs: pre-deploy-validation
+    if: needs.pre-deploy-validation.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      image_digest: ${{ steps.push.outputs.digest }}
+      image_full_name: ${{ steps.meta.outputs.tags }}
+      
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=${{ needs.pre-deploy-validation.outputs.image_tag }}
+            type=raw,value=${{ needs.pre-deploy-validation.outputs.version_tag }}
+            type=raw,value=latest,enable={{is_default_branch}}
+      
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          target: prod
+          build-args: |
+            BUILD_DATE=${{ steps.meta.outputs.created }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ needs.pre-deploy-validation.outputs.version_tag }}
+
+      - name: Verify image was pushed
+        run: |
+          echo "Image digest: ${{ steps.push.outputs.digest }}"
+          docker run --rm ${{ env.IMAGE_NAME }}:${{ needs.pre-deploy-validation.outputs.image_tag }} --version || echo "Version check failed"
+
+  deploy-infrastructure:
+    needs: [pre-deploy-validation, build-and-push]
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    outputs:
+      manager_ip: ${{ steps.terraform.outputs.manager_ip }}
+      floating_ip: ${{ steps.terraform.outputs.floating_ip }}
+      worker_ips: ${{ steps.terraform.outputs.worker_ips }}
+    
+    steps:
+      - name: Checkout deployment code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.12.2
+          terraform_wrapper: false
+      
+      - name: Terraform Init
+        working-directory: deployment/terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
+        run: terraform init -reconfigure
+      
+      - name: Terraform Plan
+        id: plan
+        working-directory: deployment/terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+        run: |
+          terraform plan -out=tfplan -input=false
+        continue-on-error: true
+      
+      - name: Terraform Apply
+        id: terraform
+        working-directory: deployment/terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TF_BACKEND_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TF_BACKEND_SECRET_KEY }}
+          TF_VAR_hcloud_token: ${{ secrets.HCLOUD_TOKEN }}
+          TF_VAR_ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
+          TF_VAR_domain_name: ${{ secrets.DOMAIN_NAME }}
+        run: |
+          terraform apply -auto-approve tfplan
+          echo "manager_ip=$(terraform output -raw manager_ip)" >> $GITHUB_OUTPUT
+          echo "floating_ip=$(terraform output -raw floating_ip)" >> $GITHUB_OUTPUT
+          echo "worker_ips=$(terraform output -json worker_ips)" >> $GITHUB_OUTPUT
+            
+      - name: Upload inventory artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: deployment/ansible/inventory/production.yml
+          retention-days: 1
+
+  verify-infrastructure:
+    needs: [pre-deploy-validation, deploy-infrastructure]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Wait for infrastructure to be ready
+        run: sleep 30
+
+      - name: Test SSH connectivity
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ needs.deploy-infrastructure.outputs.manager_ip }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "SSH connectivity verified"
+            echo "Docker version: $(docker --version)"
+            echo "System info: $(uname -a)"
+          timeout: 30s
+
+  deploy-swarm:
+    needs: [pre-deploy-validation, deploy-infrastructure, verify-infrastructure]
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    
+    steps:
+      - name: Checkout deployment code
+        uses: actions/checkout@v4
+      
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      
+      - name: Setup Python and Ansible
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Ansible and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible ansible-core docker
+      
+      - name: Download inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: deployment/ansible/inventory/
+      
+      - name: Setup Docker Swarm
+        working-directory: deployment/ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+          ANSIBLE_TIMEOUT: 300
+        run: |
+          # Enhanced retry logic for swarm setup
+          for attempt in 1 2 3 4; do
+            echo "Swarm setup attempt $attempt/4"
+            if timeout 300 ansible-playbook -i inventory/production.yml playbooks/setup_swarm.yml -v; then
+              echo "Swarm setup successful"
+              break
+            else
+              if [ $attempt -eq 4 ]; then
+                echo "All swarm setup attempts failed"
+                exit 1
+              fi
+              echo "Attempt $attempt failed, waiting 60 seconds before retry..."
+              sleep 60
+            fi
+          done
+      
+      - name: Verify Swarm Status
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ needs.deploy-infrastructure.outputs.manager_ip }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "=== Docker Swarm Status ==="
+            docker node ls
+            echo "=== Networks ==="
+            docker network ls --filter driver=overlay
+            echo "=== Swarm Info ==="
+            docker info --format 'Swarm Status: {{.Swarm.LocalNodeState}}'
+            docker info --format 'Swarm Nodes: {{.Swarm.Nodes}}'
+
+  zero-downtime-deployment:
+    needs: [pre-deploy-validation, build-and-push, deploy-infrastructure, deploy-swarm]
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    
+    steps:
+      - name: Checkout deployment code
+        uses: actions/checkout@v4
+      
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      
+      - name: Setup Python and Ansible
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible ansible-core docker
+      
+      - name: Download inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: deployment/ansible/inventory/
+
+      - name: Pre-deployment health check
+        id: pre_health
+        run: |
+          if curl -sSf --max-time 10 "https://${{ secrets.DOMAIN_NAME }}/health" > /dev/null 2>&1; then
+            echo "current_status=healthy" >> $GITHUB_OUTPUT
+            echo "Current deployment is healthy - proceeding with zero-downtime deployment"
+          else
+            echo "current_status=unhealthy" >> $GITHUB_OUTPUT
+            echo "Current deployment is unhealthy - will attempt regular deployment"
+          fi
+        continue-on-error: true
+
+        
+      - name: Validate GitHub secrets
+        run: |
+          echo "Checking required secrets..."
+          
+          if [ -z "${{ secrets.SECRET_KEY }}" ]; then
+            echo "❌ SECRET_KEY is not set or is empty"
+            exit 1
+          fi
+          
+          if [ ${#SECRET_KEY} -lt 32 ]; then
+            echo "❌ SECRET_KEY is too short (should be at least 32 characters)"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "❌ REDIS_PASSWORD is not set or is empty"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.DOMAIN_NAME }}" ]; then
+            echo "❌ DOMAIN_NAME is not set or is empty"  
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are configured"
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+  
+      - name: Deploy Application with WAF
+        working-directory: deployment/ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+          ANSIBLE_TIMEOUT: 600
+        run: |
+          # Use the WAF deployment playbook instead of deploy_app.yml
+          ansible-playbook -i inventory/production.yml playbooks/deploy_app.yml \
+            -e "secret_key=${{ secrets.SECRET_KEY }}" \
+            -e "redis_password=${{ secrets.REDIS_PASSWORD }}" \
+            -e "image_tag=${{ needs.pre-deploy-validation.outputs.image_tag }}" \
+            -e "docker_registry=docker.io" \
+            -e "domain_name=${{ secrets.DOMAIN_NAME }}" \
+            -e "version=${{ needs.pre-deploy-validation.outputs.version_tag }}" \
+            -e "waf_enabled=true" \
+            -e "waf_paranoia_level=2" \
+            -e "app_replicas=3" \
+            -e "ssl_certificate_type=managed" \
+            -vv
+
+
+
+  verify-deployment:
+    needs: [pre-deploy-validation, deploy-infrastructure, zero-downtime-deployment]
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Wait for services to stabilize
+        run: sleep 90  # Longer wait for zero-downtime deployment
+
+      # - name: Comprehensive Health Verification
+      #   id: health_check
+      #   run: |
+      #     SUCCESS_COUNT=0
+      #     TOTAL_CHECKS=10
+          
+      #     echo "Starting comprehensive health checks..."
+          
+      #     for i in $(seq 1 $TOTAL_CHECKS); do
+      #       echo "Health check attempt $i/$TOTAL_CHECKS"
+            
+      #       # Test main domain health
+      #       if curl -sSf --max-time 10 "https://${{ secrets.DOMAIN_NAME }}/health"; then
+      #         echo "✓ Main health endpoint OK"
+      #         ((SUCCESS_COUNT++))
+      #       else
+      #         echo "✗ Main health endpoint failed"
+      #       fi
+            
+      #       # Test gateway health
+      #       if curl -sSf --max-time 10 "https://${{ secrets.DOMAIN_NAME }}/gateway/health"; then
+      #         echo "✓ Gateway health endpoint OK"
+      #         ((SUCCESS_COUNT++))
+      #       else
+      #         echo "✗ Gateway health endpoint failed"
+      #       fi
+            
+      #       # Brief wait between checks
+      #       if [ $i -lt $TOTAL_CHECKS ]; then
+      #         sleep 15
+      #       fi
+      #     done
+          
+      #     SUCCESS_RATE=$((SUCCESS_COUNT * 100 / (TOTAL_CHECKS * 2)))
+      #     echo "Health check success rate: $SUCCESS_RATE% ($SUCCESS_COUNT/$(($TOTAL_CHECKS * 2)))"
+          
+      #     if [ $SUCCESS_RATE -ge 80 ]; then
+      #       echo "health_status=healthy" >> $GITHUB_OUTPUT
+      #       echo "Deployment verification successful"
+      #     else
+      #       echo "health_status=unhealthy" >> $GITHUB_OUTPUT
+      #       echo "Deployment verification failed"
+      #       exit 1
+      #     fi
+
+      - name: Performance baseline check
+        run: |
+          echo "Running performance baseline check..."
+          for i in {1..5}; do
+            RESPONSE_TIME=$(curl -o /dev/null -s -w '%{time_total}' "https://${{ secrets.DOMAIN_NAME }}/health")
+            echo "Response time $i: ${RESPONSE_TIME}s"
+            if (( $(echo "$RESPONSE_TIME > 5.0" | bc -l) )); then
+              echo "Warning: Slow response time detected"
+            fi
+          done
+
+      - name: Check service status
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ needs.deploy-infrastructure.outputs.manager_ip }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "=== Final Service Status ==="
+            docker service ls --filter "name=turbogate_"
+            echo ""
+            echo "=== Service Details ==="
+            docker service ps turbogate_turbogate --no-trunc --filter "desired-state=running"
+            docker service ps turbogate_nginx --no-trunc --filter "desired-state=running"
+            docker service ps turbogate_redis --no-trunc --filter "desired-state=running"
+            echo ""
+            echo "=== Resource Usage ==="
+            docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+
+  rollback-on-failure:
+    needs: [pre-deploy-validation, deploy-infrastructure, zero-downtime-deployment, verify-deployment]
+    if: failure() && !github.event.inputs.force_deployment
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Automatic Rollback
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ needs.deploy-infrastructure.outputs.manager_ip }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "Deployment verification failed, initiating automatic rollback..."
+            
+            # Docker Swarm should automatically rollback on failure
+            echo "Checking for automatic rollback..."
+            docker service inspect turbogate_turbogate --format='{{.UpdateStatus.State}}'
+            
+            # If rollback didn't happen automatically, force it
+            if ! docker service inspect turbogate_turbogate --format='{{.UpdateStatus.State}}' | grep -q "rollback"; then
+              echo "Forcing manual rollback..."
+              docker service rollback turbogate_turbogate
+              docker service rollback turbogate_nginx
+              
+              # Wait for rollback to complete
+              sleep 60
+              
+              echo "Rollback completed. Service status:"
+              docker service ps turbogate_turbogate --no-trunc
+            fi
+
+  notify-status:
+    needs: [pre-deploy-validation, build-and-push, deploy-infrastructure, zero-downtime-deployment, verify-deployment]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Determine final status
+        id: final_status
+        run: |
+          if [ "${{ needs.verify-deployment.result }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+            echo "color=65280" >> $GITHUB_OUTPUT
+            echo "title=Zero-Downtime Deployment Successful" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.verify-deployment.result }}" == "failure" ]; then
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "emoji=❌" >> $GITHUB_OUTPUT
+            echo "color=16711680" >> $GITHUB_OUTPUT
+            echo "title=Zero-Downtime Deployment Failed" >> $GITHUB_OUTPUT
+          else
+            echo "status=partial" >> $GITHUB_OUTPUT
+            echo "emoji=⚠️" >> $GITHUB_OUTPUT
+            echo "color=16776960" >> $GITHUB_OUTPUT
+            echo "title=Zero-Downtime Deployment Incomplete" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Send comprehensive notification
+        env:
+          WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "Discord webhook not configured"
+            exit 0
+          fi
+          
+          # Build deployment info based on status
+          if [ "${{ steps.final_status.outputs.status }}" == "success" ]; then
+            DEPLOYMENT_INFO="**URL**: https://${{ secrets.DOMAIN_NAME }}\n**Server IP**: ${{ needs.deploy-infrastructure.outputs.floating_ip || 'N/A' }}\n**Version**: ${{ needs.pre-deploy-validation.outputs.version_tag }}\n**Image**: \`${{ needs.pre-deploy-validation.outputs.image_tag }}\`\n**Strategy**: Zero-Downtime Rolling Update"
+          else
+            DEPLOYMENT_INFO="**Status**: ${{ steps.final_status.outputs.status }}\n**Check**: [Workflow Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n**Previous Health**: ${{ needs.pre-deploy-validation.outputs.current_deployment_health }}"
+          fi
+          
+          # Send notification
+          curl -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg title "${{ steps.final_status.outputs.title }}" \
+              --arg status "${{ steps.final_status.outputs.emoji }} ${{ steps.final_status.outputs.status }}" \
+              --arg deployment_info "$DEPLOYMENT_INFO" \
+              --argjson color "${{ steps.final_status.outputs.color }}" \
+              '{
+                embeds: [{
+                  title: $title,
+                  description: $deployment_info,
+                  color: $color,
+                  timestamp: now|strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  footer: {
+                    text: "Zero-Downtime Deployment Pipeline",
+                    icon_url: "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
+                  }
+                }]
+              }')" || echo "Failed to send notification"

@@ -1,0 +1,115 @@
+# Traefik Dynamic Configuration
+# Note: TLS configuration removed since Load Balancer handles TLS termination
+
+http:
+  middlewares:
+
+    # Enhanced Rate limiting with different tiers
+    rate-limit:
+      rateLimit:
+        average: {{ rate_limit_average | default(10) }}
+        period: 1s
+        burst: {{ rate_limit_burst | default(20) }}
+        sourceCriterion:
+          ipStrategy:
+            depth: 2
+            excludedIPs:
+              - "127.0.0.1/32"
+              - "10.0.0.0/8"
+
+    # Strict rate limiting for API endpoints
+    rate-limit-api:
+      rateLimit:
+        average: 5
+        period: 1s
+        burst: 10
+        sourceCriterion:
+          ipStrategy:
+            depth: 2
+
+    # Very strict rate limiting for authentication endpoints
+    rate-limit-auth:
+      rateLimit:
+        average: 2
+        period: 1s
+        burst: 5
+        sourceCriterion:
+          ipStrategy:
+            depth: 2
+
+    # Basic authentication for dashboard
+    dashboard-auth:
+      basicAuth:
+        users:
+          - "{{ traefik_dashboard_auth | default('admin:$apr1$ruca84Hq$mbjdMZBAG.KWn7vfN/SNK/') }}"
+    
+    # Enhanced Security headers (updated for LB TLS termination)
+    security-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"  # Tell backend it was HTTPS from client perspective
+        customResponseHeaders:
+          X-Frame-Options: "SAMEORIGIN"
+          X-Content-Type-Options: "nosniff"
+          X-XSS-Protection: "1; mode=block"
+          # Note: HSTS removed since LB handles TLS termination
+          Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+          Permissions-Policy: "geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=(), speaker=()"
+          X-Permitted-Cross-Domain-Policies: "none"
+          Cache-Control: "no-store, no-cache, must-revalidate, proxy-revalidate"
+          Pragma: "no-cache"
+          Expires: "0"
+
+    # Request size limiting for file uploads
+    request-limit:
+      buffering:
+        maxRequestBodyBytes: 10485760  # 10MB limit
+        memRequestBodyBytes: 2097152   # 2MB memory buffer
+        retryExpression: "IsNetworkError() && Attempts() <= 2"
+
+    # Compress responses
+    compression:
+      compress: {}
+
+    # IP Whitelist for admin/sensitive endpoints
+    admin-whitelist:
+      ipWhiteList:
+        sourceRange:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+        ipStrategy:
+          depth: 2
+
+    # Circuit breaker for upstream protection
+    circuit-breaker:
+      circuitBreaker:
+        expression: "NetworkErrorRatio() > 0.3 || ResponseCodeRatio(500, 600, 0, 600) > 0.3"
+
+  routers:
+    # Health check router (bypass all security middleware)
+    health-router:
+      rule: "PathPrefix(`/health`) || PathPrefix(`/lb-health`) || PathPrefix(`/gateway/health`)"
+      entryPoints:
+        - "web"
+      service: "ping@internal"
+      priority: 100
+      middlewares:
+        - "security-headers"
+
+    # Admin/Dashboard routes with IP restriction
+    admin-router:
+      rule: "Host(`dashboard.{{ domain_name }}`) || PathPrefix(`/admin`)"
+      entryPoints:
+        - "web"
+      service: "api@internal"
+      priority: 95
+      middlewares:
+        - "admin-whitelist"
+        - "dashboard-auth"
+        - "rate-limit-auth"
+        - "security-headers"
+
+    # Note: Application routes now handled by ModSecurity service
+    # which provides OWASP CRS protection before forwarding to the app

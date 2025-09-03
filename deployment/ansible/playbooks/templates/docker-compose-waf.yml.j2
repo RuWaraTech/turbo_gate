@@ -1,0 +1,340 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v3.4
+    networks:
+      - traefik_proxy
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+    configs:
+      - source: traefik_tls_config_v{{ resource_version }}
+        target: /dynamic/tls.yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/turbogate/certs:/certs:ro
+    environment:
+      - TRAEFIK_LOG_LEVEL=INFO
+    command:
+      # HTTP EntryPoint (receives traffic from Load Balancer)
+      - "--entrypoints.web.address=:80"
+      # Remove HTTPS redirect since LB handles TLS termination
+      # Attach dynamic configuration file for middlewares
+      - "--providers.file.filename=/dynamic/tls.yaml"
+      - "--providers.file.watch=true"
+      # Enable the Docker Swarm provider
+      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      - "--providers.swarm.watch=true"
+      - "--providers.swarm.exposedbydefault=false"
+      - "--providers.swarm.network=turbogate_traefik_proxy"
+      # API & Dashboard
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      # Observability
+      - "--log.level=INFO"
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--metrics.prometheus=true"
+    deploy:
+      mode: replicated
+      replicas: {{ traefik_replicas | default(2) }}
+      placement:
+        constraints:
+          - node.role == manager
+          - node.labels.security_zone == dmz
+          - node.labels.security_hardened == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
+        failure_action: rollback
+        monitor: 60s
+        max_failure_ratio: 0.1
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        monitor: 30s
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      labels:
+        - "traefik.enable=true"
+        # Dashboard router (HTTP since LB handles TLS)
+        - "traefik.http.routers.dashboard.rule=Host(`dashboard.{{ domain_name }}`)"
+        - "traefik.http.routers.dashboard.entrypoints=web"
+        - "traefik.http.routers.dashboard.service=api@internal"
+        - "traefik.http.routers.dashboard.middlewares=dashboard-auth@file"
+        # Health check router (bypass WAF)
+        - "traefik.http.routers.health.rule=PathPrefix(`/health`) || PathPrefix(`/lb-health`)"
+        - "traefik.http.routers.health.entrypoints=web"
+        - "traefik.http.routers.health.service=ping@internal"
+        - "traefik.http.routers.health.priority=100"
+        - "traefik.http.routers.health.middlewares=security-headers@file"
+        # Service hint
+        - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  modsecurity:
+    image: owasp/modsecurity-crs:4.3.0-apache-alpine
+    environment:
+      PARANOIA: {{ modsec_paranoia_level | default(1) }}
+      BACKEND: http://turbogate:5000
+      BACKEND_WS: ws://turbogate:5000
+      PORT: 80
+      MODSEC_AUDIT_LOG: /dev/stdout
+      MODSEC_AUDIT_LOG_FORMAT: JSON
+      MODSEC_RULE_ENGINE: {{ modsec_rule_engine | default('On') }}
+      MODSEC_REQ_BODY_ACCESS: 'On'
+      MODSEC_REQ_BODY_LIMIT: 13107200
+      MODSEC_REQ_BODY_NOFILES_LIMIT: 131072
+      MODSEC_RESP_BODY_ACCESS: 'On'
+      MODSEC_RESP_BODY_LIMIT: 524288
+      # Custom exclusions for health checks
+      EXCLUSIONS_FILE: /opt/owasp-crs/custom-exclusions.conf
+    configs:
+      - source: modsecurity_exclusions_v{{ resource_version }}
+        target: /opt/owasp-crs/custom-exclusions.conf
+    deploy:
+      replicas: {{ modsec_replicas | default(2) }}
+      placement:
+        constraints:
+          - node.role == worker
+          - node.labels.security_zone == dmz
+          - node.labels.security_hardened == true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
+        failure_action: rollback
+        monitor: 60s
+        max_failure_ratio: 0.1
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        monitor: 30s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        # ModSecurity WAF service
+        - "traefik.http.routers.modsecurity.rule=Host(`{{ domain_name }}`) || Host(`www.{{ domain_name }}`)"
+        - "traefik.http.routers.modsecurity.entrypoints=web"
+        - "traefik.http.routers.modsecurity.middlewares=rate-limit@file,security-headers@file"
+        - "traefik.http.routers.modsecurity.priority=80"
+        # API routes with stricter protection through ModSecurity
+        - "traefik.http.routers.modsecurity-api.rule=Host(`{{ domain_name }}`) && PathPrefix(`/api/`)"
+        - "traefik.http.routers.modsecurity-api.entrypoints=web"
+        - "traefik.http.routers.modsecurity-api.middlewares=rate-limit-api@file,security-headers@file,request-limit@file"
+        - "traefik.http.routers.modsecurity-api.priority=90"
+        # Service configuration
+        - "traefik.http.services.modsecurity.loadbalancer.server.port=80"
+        - "traefik.http.services.modsecurity.loadbalancer.healthcheck.path=/gateway/health"
+        - "traefik.http.services.modsecurity.loadbalancer.healthcheck.interval=15s"
+        - "traefik.http.services.modsecurity.loadbalancer.healthcheck.timeout=5s"
+    networks:
+      - turbogate_backend
+      - traefik_proxy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/gateway/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      - turbogate
+
+  turbogate:
+    image: {{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag | default('latest') }}
+    deploy:
+      replicas: {{ app_replicas | default(3) }}
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
+        failure_action: rollback
+        monitor: 60s
+        max_failure_ratio: 0.1
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+        monitor: 30s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      placement:
+        constraints:
+          - node.role == worker
+          - node.labels.security_zone == internal
+          - node.labels.security_hardened == true
+        preferences:
+          - spread: node.id
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      labels:
+        - "traefik.enable=false"  # Disable direct access to app - force through ModSecurity
+        # Service configuration
+        - "traefik.http.services.turbogate.loadbalancer.server.port=5000"
+        - "traefik.http.services.turbogate.loadbalancer.healthcheck.path=/gateway/health"
+        - "traefik.http.services.turbogate.loadbalancer.healthcheck.interval=15s"
+        - "traefik.http.services.turbogate.loadbalancer.healthcheck.timeout=5s"
+    environment:
+      - FLASK_ENV=prod
+      - SSL_TERMINATED_AT=traefik
+      - SECURE_COOKIES=true
+      - LOG_LEVEL=INFO
+      - DOMAIN_NAME={{ domain_name }}
+      - VERSION={{ version | default('unknown') }}
+    user: "1001:1001"
+    tmpfs:
+      - /tmp:uid=1001,gid=1001,mode=1777
+      - /var/tmp:uid=1001,gid=1001,mode=1777
+      - /.cache/pypoetry:uid=1001,gid=1001
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    secrets:
+      - source: turbogate_secret_key_v{{ resource_version }}
+        target: SECRET_KEY
+        mode: 0444
+      - source: redis_password_v{{ resource_version }}
+        target: redis_password
+        mode: 0444
+    networks:
+      - turbogate_backend
+      - turbogate_database
+      - traefik_proxy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    deploy:
+      replicas: 1
+      placement:
+        constraints: 
+          - node.role == manager
+          - node.labels.security_zone == dmz
+          - node.labels.security_hardened == true
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["redis-server --requirepass \"$$(cat /run/secrets/redis_password)\" --maxmemory 200mb --maxmemory-policy allkeys-lru --save 900 1 --save 300 10"]
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    secrets:
+      - source: redis_password_v{{ resource_version }}
+        target: redis_password
+        mode: 0444
+    networks:
+      - turbogate_database
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  redis_data:
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/turbogate/redis
+
+networks:
+  turbogate_frontend:
+    external: true
+  turbogate_backend:
+    external: true  
+  turbogate_database:
+    external: true
+  traefik_proxy:
+    driver: overlay
+    attachable: true
+
+configs:
+  traefik_tls_config_v{{ resource_version }}:
+    external: true
+  modsecurity_exclusions_v{{ resource_version }}:
+    external: true
+
+secrets:
+  turbogate_secret_key_v{{ resource_version }}:
+    external: true
+  redis_password_v{{ resource_version }}:
+    external: true
