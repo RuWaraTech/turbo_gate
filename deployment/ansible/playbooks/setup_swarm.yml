@@ -4,7 +4,6 @@
   become: yes
   gather_facts: yes
   vars:
-    # Use standard Ansible fact for the node's primary IP address.
     swarm_advertise_addr: "{{ ansible_default_ipv4.address }}"
     swarm_listen_addr: "{{ ansible_default_ipv4.address }}:2377"
     join_retries: 3
@@ -64,7 +63,7 @@
         state: present
 
     - name: Check current swarm status of the node
-      ansible.builtin.command: docker info --format '{{ "{{ .Swarm.LocalNodeState }}" }}'
+      ansible.builtin.command: "docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'"
       register: swarm_state
       changed_when: false
 
@@ -75,7 +74,7 @@
         listen_addr: "{{ swarm_listen_addr }}"
       when:
         - "'swarm_managers' in group_names"
-        - inventory_hostname == groups['swarm_managers'][0] # Only run on the first manager
+        - inventory_hostname == groups['swarm_managers'][0]
         - swarm_state.stdout == "inactive"
 
     - name: Get worker join token from the manager
@@ -106,6 +105,13 @@
       until: "join_result is success"
       register: join_result
 
+    # --- FIX: Wait for Swarm to stabilize ---
+    - name: Wait for Swarm cluster to stabilize
+      ansible.builtin.pause:
+        seconds: 15
+      run_once: true
+      when: join_result is changed
+
     - name: Create shared external overlay networks
       community.docker.docker_network:
         name: "{{ item }}"
@@ -121,7 +127,7 @@
       community.docker.docker_node:
         hostname: "{{ ansible_hostname }}"
         labels:
-          security_hardened: "true" # Assuming hardening is always applied
+          security_hardened: "true"
           security_zone: "{{ 'dmz' if 'swarm_managers' in group_names else 'internal' }}"
       delegate_to: "{{ groups['swarm_managers'][0] }}"
 
