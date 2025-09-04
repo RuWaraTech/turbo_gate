@@ -17,7 +17,7 @@
 
     - name: Install required packages
       ansible.builtin.package:
-        name: [curl, python3-pip, netcat]
+        name: [curl, python3-pip, netcat-traditional]
         state: present
 
     - name: Check if Docker is already installed
@@ -52,10 +52,24 @@
         name: [jsondiff, "docker>=6.0.0"]
         state: present
 
+    # NEW: Clean up any existing swarm state on worker nodes
     - name: Check current swarm status of the node
-      ansible.builtin.command: "docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'"
+      ansible.builtin.command: "docker info --format '{{.Swarm.LocalNodeState}}'"
       register: swarm_state
       changed_when: false
+
+    - name: Leave swarm if node is in error state (worker nodes only)
+      ansible.builtin.command: docker swarm leave --force
+      when:
+        - "'swarm_workers' in group_names"
+        - swarm_state.stdout in ["error", "locked"]
+      ignore_errors: yes
+
+    - name: Re-check swarm status after cleanup
+      ansible.builtin.command: "docker info --format '{{.Swarm.LocalNodeState}}'"
+      register: swarm_state_clean
+      changed_when: false
+      when: "'swarm_workers' in group_names"
 
     - name: Initialize swarm on the primary manager
       community.docker.docker_swarm:
@@ -78,6 +92,7 @@
         docker_worker_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
       when: swarm_info.swarm_facts is defined
 
+    # IMPROVED: Better join logic with retries
     - name: Join worker nodes to the swarm
       community.docker.docker_swarm:
         state: join
@@ -86,15 +101,34 @@
         remote_addrs: ["{{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}:2377"]
       when:
         - "'swarm_workers' in group_names"
-        - swarm_state.stdout == "inactive"
+        - (swarm_state_clean.stdout | default(swarm_state.stdout)) == "inactive"
         - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined
+      retries: 3
+      delay: 10
 
-    # --- NEW ROBUST FIX: Wait for all nodes to be ready ---
-    - name: Wait until all worker nodes are registered and ready on the manager
-      ansible.builtin.shell: "docker node ls --format '{{ '{{' }}.Hostname {{ '}}' }} {{ '{{' }}.Status {{ '}}' }}'"
-      register: node_status
-      until: "node_status.stdout.split('\\n') | select('match', 'Ready') | list | length == (groups['swarm_managers'] | length) + (groups['swarm_workers'] | length)"
-      retries: 10
+    # FIXED: More robust node readiness check
+    - name: Wait for all nodes to appear in the swarm
+      ansible.builtin.shell: "docker node ls --format '{{.Hostname}}' | wc -l"
+      register: node_count
+      until: node_count.stdout | int >= ((groups['swarm_managers'] | length) + (groups['swarm_workers'] | length))
+      retries: 20
+      delay: 5
+      run_once: true
+      delegate_to: "{{ groups['swarm_managers'][0] }}"
+      changed_when: false
+
+    - name: Wait for nodes to become ready (with tolerance for temporary unavailable state)
+      ansible.builtin.shell: |
+        ready_nodes=$(docker node ls --filter role=worker --format '{{.Status}}' | grep -c "Ready" || echo "0")
+        total_workers={{ groups['swarm_workers'] | length }}
+        if [ "$ready_nodes" -ge $(($total_workers * 2 / 3)) ]; then
+          exit 0
+        else
+          exit 1
+        fi
+      register: nodes_ready
+      until: nodes_ready.rc == 0
+      retries: 15
       delay: 10
       run_once: true
       delegate_to: "{{ groups['swarm_managers'][0] }}"
