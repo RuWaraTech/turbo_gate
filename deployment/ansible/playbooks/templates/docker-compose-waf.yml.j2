@@ -107,7 +107,7 @@ services:
       PORT: "8080"
       MODSEC_AUDIT_LOG: "/dev/stdout"
       MODSEC_AUDIT_LOG_FORMAT: "JSON"
-      MODSEC_RULE_ENGINE: "{{ modsec_rule_engine | default('On') }}"
+      MODSEC_RULE_ENGINE: "{{ 'On' if modsec_rule_engine == 'true' or modsec_rule_engine == 'On' else 'Off' }}" 
       MODSEC_REQ_BODY_ACCESS: "On"
       MODSEC_REQ_BODY_LIMIT: "13107200"
       MODSEC_REQ_BODY_NOFILES_LIMIT: "131072"
