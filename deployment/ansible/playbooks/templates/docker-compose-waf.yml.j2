@@ -9,7 +9,6 @@ services:
       - target: 80
         published: 80
         protocol: tcp
-        mode: host
     configs:
       - source: traefik_tls_config_v{{ resource_version }}
         target: /dynamic/tls.yaml
@@ -123,7 +122,6 @@ services:
       placement:
         constraints:
           - node.role == worker
-          - node.labels.security_zone == dmz
           - node.labels.security_hardened == true
         preferences:
           - spread: node.id
