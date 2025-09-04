@@ -1,3 +1,9 @@
+## v1.4.5 (2025-09-04)
+
+### fix
+
+- addition of delay so services have enough time to start   & stabilise
+
 ## v1.4.4 (2025-09-04)
 
 ### fix
