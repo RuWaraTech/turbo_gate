@@ -40,9 +40,11 @@ all:
     load_balancer_ipv6: ""
 %{ endif ~}
     
-    # Traefik + Coraza WAF configuration
+    # Traefik + ModSecurity WAF configuration
     traefik_enabled: ${traefik_enabled}
-    coraza_rule_engine: ${coraza_rule_engine}
+    modsec_rule_engine: ${modsec_rule_engine}
+    modsec_paranoia_level: ${modsec_paranoia_level}
+    modsec_replicas: ${modsec_replicas}
     traefik_dashboard_auth: ${traefik_dashboard_auth}
     rate_limit_average: ${rate_limit_average}
     rate_limit_burst: ${rate_limit_burst}
