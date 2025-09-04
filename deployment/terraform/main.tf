@@ -77,7 +77,7 @@ resource "hcloud_firewall" "ssh_access" {
   }
 }
 
-# Firewall for Traefik Proxy with Coraza WAF
+# Firewall for Traefik Proxy with ModSecurity WAF
 resource "hcloud_firewall" "traefik" {
   name = "turbogate-traefik-fw"
 
