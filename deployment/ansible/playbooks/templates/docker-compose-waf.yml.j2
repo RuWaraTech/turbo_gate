@@ -101,20 +101,19 @@ services:
   modsecurity:
     image: owasp/modsecurity-crs:4.3.0-apache-alpine
     environment:
-      PARANOIA: {{ modsec_paranoia_level | default(1) }}
-      BACKEND: http://turbogate:5000
-      BACKEND_WS: ws://turbogate:5000
-      PORT: 80
-      MODSEC_AUDIT_LOG: /dev/stdout
-      MODSEC_AUDIT_LOG_FORMAT: JSON
-      MODSEC_RULE_ENGINE: {{ modsec_rule_engine | default('On') }}
-      MODSEC_REQ_BODY_ACCESS: 'On'
-      MODSEC_REQ_BODY_LIMIT: 13107200
-      MODSEC_REQ_BODY_NOFILES_LIMIT: 131072
-      MODSEC_RESP_BODY_ACCESS: 'On'
-      MODSEC_RESP_BODY_LIMIT: 524288
-      # Custom exclusions for health checks
-      EXCLUSIONS_FILE: /opt/owasp-crs/custom-exclusions.conf
+      PARANOIA: "{{ modsec_paranoia_level | default(1) }}"
+      BACKEND: "http://turbogate:5000"
+      BACKEND_WS: "ws://turbogate:5000"
+      PORT: "80"
+      MODSEC_AUDIT_LOG: "/dev/stdout"
+      MODSEC_AUDIT_LOG_FORMAT: "JSON"
+      MODSEC_RULE_ENGINE: "{{ modsec_rule_engine | default('On') }}"
+      MODSEC_REQ_BODY_ACCESS: "On"
+      MODSEC_REQ_BODY_LIMIT: "13107200"
+      MODSEC_REQ_BODY_NOFILES_LIMIT: "131072"
+      MODSEC_RESP_BODY_ACCESS: "On"
+      MODSEC_RESP_BODY_LIMIT: "524288"
+      EXCLUSIONS_FILE: "/opt/owasp-crs/custom-exclusions.conf"
     configs:
       - source: modsecurity_exclusions_v{{ resource_version }}
         target: /opt/owasp-crs/custom-exclusions.conf
