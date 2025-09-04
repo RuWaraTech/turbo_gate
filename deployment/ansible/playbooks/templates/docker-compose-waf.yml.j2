@@ -95,7 +95,7 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -184,7 +184,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     depends_on:
       - turbogate
 
@@ -391,17 +391,14 @@ services:
           memory: 64M
     entrypoint: ["/bin/sh", "-c"]
     command: |
-      echo "Waiting for redis-master to be available..."
-      while ! redis-cli -h redis-master -p 6379 -a "$$(cat /run/secrets/redis_password)" ping; do
-        sleep 1
-      done
-      echo "Redis-master is available. Starting sentinel."
+      echo "Writing sentinel config..."
       echo "port 26379
       sentinel monitor mymaster redis-master 6379 2
       sentinel auth-pass mymaster $$(cat /run/secrets/redis_password)
       sentinel down-after-milliseconds mymaster 5000
       sentinel failover-timeout mymaster 10000
       sentinel parallel-syncs mymaster 1" > /tmp/sentinel.conf &&
+      echo "Starting sentinel." &&
       redis-sentinel /tmp/sentinel.conf
     user: "999:999"
     tmpfs:
