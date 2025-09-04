@@ -1,5 +1,5 @@
 #!/bin/bash
-# SSL Certificate Synchronization Script for Global NGINX Deployment
+# SSL Certificate Synchronization Script for Traefik Deployment
 # This script ensures all Docker Swarm nodes have the same SSL certificates
 
 set -e
@@ -125,17 +125,17 @@ verify_all_nodes() {
     fi
 }
 
-# Function to reload NGINX on all nodes
-reload_nginx_global() {
-    log "Reloading NGINX WAF service globally..."
+# Function to reload Traefik on all nodes
+reload_traefik_global() {
+    log "Reloading Traefik service globally..."
     
     # Update the service to force reload on all nodes
-    docker service update --force turbogate_nginx-waf 2>/dev/null || {
-        log "WARNING: Could not reload NGINX WAF service"
+    docker service update --force turbogate_traefik 2>/dev/null || {
+        log "WARNING: Could not reload Traefik service"
         return 1
     }
     
-    log "NGINX WAF service reload initiated"
+    log "Traefik service reload initiated"
     return 0
 }
 
@@ -174,8 +174,8 @@ main() {
     if verify_all_nodes; then
         log "Verification successful - all nodes have certificates"
         
-        # Reload NGINX globally
-        reload_nginx_global
+        # Reload Traefik globally
+        reload_traefik_global
     else
         log "ERROR: Verification failed - manual intervention required"
         exit 1

@@ -2,7 +2,7 @@
 
 set -e
 
-echo "🔍 Validating Complete Traefik + Coraza Migration..."
+echo "🔍 Validating Complete Traefik + ModSecurity Migration..."
 echo "================================================="
 
 # Colors for output
@@ -79,10 +79,10 @@ else
     check_error "Terraform variables missing Traefik configuration"
 fi
 
-if grep -q "coraza_rule_engine" /home/dev_two/Documents/turbo_gate/deployment/terraform/variables.tf; then
-    check_success "Terraform variables contain Coraza WAF configuration"
+if grep -q "modsec_rule_engine" /home/dev_two/Documents/turbo_gate/deployment/terraform/variables.tf; then
+    check_success "Terraform variables contain ModSecurity WAF configuration"
 else
-    check_error "Terraform variables missing Coraza WAF configuration"
+    check_error "Terraform variables missing ModSecurity WAF configuration"
 fi
 
 # Check if old WAF variables are removed
@@ -111,10 +111,10 @@ echo "🐳 Docker Swarm Configuration Validation"
 echo "========================================"
 
 # Check Docker Compose configuration
-if grep -q "coraza-traefik" /home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2; then
-    check_success "Coraza WAF plugin configured"
+if grep -q "owasp/modsecurity-crs" /home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2; then
+    check_success "ModSecurity WAF configured"
 else
-    check_warning "Coraza WAF plugin may not be configured"
+    check_warning "ModSecurity WAF may not be configured"
 fi
 
 if grep -q "traefik_proxy" /home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2; then
@@ -146,11 +146,11 @@ else
     check_error "Ansible missing Traefik TLS configuration setup"
 fi
 
-# Check if old NGINX references are removed
-if grep -q "owasp/modsecurity-crs:nginx-alpine" /home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/deploy_app.yml; then
-    check_error "Ansible still references old NGINX WAF image"
+# Check if using correct ModSecurity Apache image
+if grep -q "owasp/modsecurity-crs:4.3.0-apache-alpine" /home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2; then
+    check_success "Using correct ModSecurity Apache image"
 else
-    check_success "Old NGINX WAF references removed from Ansible"
+    check_error "ModSecurity Apache image not found in configuration"
 fi
 
 echo
@@ -159,10 +159,10 @@ echo "==================================="
 
 # Check TLS configuration
 if [ -f "/home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/templates/tls.yaml.j2" ]; then
-    if grep -q "coraza-waf" "/home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/templates/tls.yaml.j2"; then
-        check_success "Comprehensive Coraza WAF middleware configured"
+    if grep -q "rate-limit" "/home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/templates/tls.yaml.j2"; then
+        check_success "Comprehensive ModSecurity WAF middleware configured"
     else
-        check_warning "Basic WAF configuration - consider enabling full Coraza"
+        check_warning "Basic WAF configuration - consider enabling additional middleware"
     fi
     
     if grep -q "OWASP_CRS" "/home/dev_two/Documents/turbo_gate/deployment/ansible/playbooks/templates/tls.yaml.j2"; then
@@ -203,7 +203,7 @@ if [ $error_count -eq 0 ]; then
     echo
     echo "🔐 Security Features Enabled:"
     echo "   • Traefik v3.4 reverse proxy"
-    echo "   • Coraza WAF with OWASP Core Rule Set v4.0"
+    echo "   • ModSecurity WAF with OWASP Core Rule Set v4.3.0"
     echo "   • End-to-end TLS encryption (LB → Traefik → App)"
     echo "   • Multi-tier rate limiting"
     echo "   • Comprehensive security headers"

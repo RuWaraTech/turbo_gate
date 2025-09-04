@@ -39,7 +39,8 @@
       loop:
         - { path: "/opt/turbogate", owner: "root", group: "root", mode: "0755" }
         - { path: "/var/log/turbogate", owner: "root", group: "root", mode: "0755" }
-        - { path: "/var/lib/turbogate/redis", owner: "999", group: "999", mode: "0755" }
+        - { path: "/var/lib/turbogate/redis-master", owner: "999", group: "999", mode: "0755" }
+        - { path: "/var/lib/turbogate/redis-replica", owner: "999", group: "999", mode: "0755" }
         - { path: "/var/log/traefik", owner: "root", group: "root", mode: "0755" }
         - { path: "/opt/turbogate/certs", owner: "root", group: "root", mode: "0755" }
 

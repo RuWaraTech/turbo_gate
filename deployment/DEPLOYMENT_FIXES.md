@@ -1,8 +1,8 @@
-# TurboGate Deployment Fixes - ModSecurity WAF Integration
+# TurboGate Deployment Fixes - Traefik + ModSecurity WAF Integration
 
 ## Summary of Issues Fixed
 
-This document outlines the critical fixes applied to resolve Docker Swarm deployment issues with ModSecurity WAF protection.
+This document outlines the critical fixes applied to resolve Docker Swarm deployment issues with Traefik proxy and ModSecurity WAF protection.
 
 ## Fixed Issues
 
@@ -11,35 +11,35 @@ This document outlines the critical fixes applied to resolve Docker Swarm deploy
 **Solution**: Removed deprecated directive from `modsecurity.conf.j2`
 **Location**: `deployment/ansible/playbooks/templates/modsecurity.conf.j2:12`
 
-### 2. Docker Volume Configuration ✅  
-**Problem**: Missing nginx volume definitions causing container failures
-**Solution**: Added `nginx_waf_logs` and `nginx_cache` volumes to docker-compose template
-**Location**: `deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2:100-103`
+### 2. Traefik Integration ✅  
+**Problem**: Migrated from NGINX to Traefik for better Docker Swarm integration
+**Solution**: Updated docker-compose to use Traefik v3.4 with built-in service discovery
+**Location**: `deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2`
 
-### 3. Container Permissions ✅
-**Problem**: nginx PID file permission errors with non-root user
-**Solution**: Removed `user: "101:101"` directive to use container defaults
-**Location**: `deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2:30`
+### 3. ModSecurity Apache Backend ✅
+**Problem**: Updated ModSecurity to use Apache backend instead of NGINX
+**Solution**: Using `owasp/modsecurity-crs:4.3.0-apache-alpine` image
+**Location**: `deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2`
 
-### 4. Directory Creation ✅
-**Problem**: Missing host directories for nginx logs and cache
-**Solution**: Added nginx directories to Ansible directory creation task
-**Location**: `deployment/ansible/playbooks/deploy_app.yml:43-44`
+### 4. Service Discovery ✅
+**Problem**: Simplified routing through Traefik labels
+**Solution**: Removed manual proxy configuration in favor of automatic service discovery
+**Location**: `deployment/ansible/playbooks/templates/docker-compose-waf.yml.j2`
 
 ## Deployment Architecture
 
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Internet      │    │  ModSecurity WAF │    │   TurboGate     │
-│   Traffic       │───▶│  (nginx + WAF)   │───▶│   API Gateway   │
-│                 │    │  Port 80         │    │   Port 5000     │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                              │                        │
-                              ▼                        ▼
-                       ┌─────────────┐           ┌──────────┐
-                       │ nginx_waf_  │           │  Redis   │
-                       │ logs volume │           │ Database │
-                       └─────────────┘           └──────────┘
+┌─────────────────┐    ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   Internet      │    │    Traefik      │    │  ModSecurity WAF │    │   TurboGate     │
+│   Traffic       │───▶│   (Proxy)       │───▶│  (Apache + WAF)  │───▶│   API Gateway   │
+│                 │    │   Port 80       │    │  Internal Port   │    │   Port 5000     │
+└─────────────────┘    └─────────────────┘    └──────────────────┘    └─────────────────┘
+                              │                                               │
+                              ▼                                               ▼
+                       ┌─────────────┐                                 ┌──────────┐
+                       │   Docker    │                                 │  Redis   │
+                       │   Socket    │                                 │ Database │
+                       └─────────────┘                                 └──────────┘
 ```
 
 ## Security Features

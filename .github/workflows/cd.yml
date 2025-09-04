@@ -155,7 +155,7 @@ jobs:
     environment: ${{ github.event.inputs.environment || 'production' }}
     outputs:
       manager_ip: ${{ steps.terraform.outputs.manager_ip }}
-      floating_ip: ${{ steps.terraform.outputs.floating_ip }}
+      load_balancer_ip: ${{ steps.terraform.outputs.load_balancer_ip }}
       worker_ips: ${{ steps.terraform.outputs.worker_ips }}
     
     steps:
@@ -200,7 +200,7 @@ jobs:
         run: |
           terraform apply -auto-approve tfplan
           echo "manager_ip=$(terraform output -raw manager_ip)" >> $GITHUB_OUTPUT
-          echo "floating_ip=$(terraform output -raw floating_ip)" >> $GITHUB_OUTPUT
+          echo "load_balancer_ip=$(terraform output -raw load_balancer_ip || echo '')" >> $GITHUB_OUTPUT
           echo "worker_ips=$(terraform output -json worker_ips)" >> $GITHUB_OUTPUT
             
       - name: Upload inventory artifact
@@ -468,7 +468,8 @@ jobs:
             echo ""
             echo "=== Service Details ==="
             docker service ps turbogate_turbogate --no-trunc --filter "desired-state=running"
-            docker service ps turbogate_nginx --no-trunc --filter "desired-state=running"
+            docker service ps turbogate_traefik --no-trunc --filter "desired-state=running"
+            docker service ps turbogate_modsecurity --no-trunc --filter "desired-state=running"
             docker service ps turbogate_redis --no-trunc --filter "desired-state=running"
             echo ""
             echo "=== Resource Usage ==="
@@ -497,7 +498,8 @@ jobs:
             if ! docker service inspect turbogate_turbogate --format='{{.UpdateStatus.State}}' | grep -q "rollback"; then
               echo "Forcing manual rollback..."
               docker service rollback turbogate_turbogate
-              docker service rollback turbogate_nginx
+              docker service rollback turbogate_traefik
+              docker service rollback turbogate_modsecurity
               
               # Wait for rollback to complete
               sleep 60
@@ -543,7 +545,7 @@ jobs:
           
           # Build deployment info based on status
           if [ "${{ steps.final_status.outputs.status }}" == "success" ]; then
-            DEPLOYMENT_INFO="**URL**: https://${{ secrets.DOMAIN_NAME }}\n**Server IP**: ${{ needs.deploy-infrastructure.outputs.floating_ip || 'N/A' }}\n**Version**: ${{ needs.pre-deploy-validation.outputs.version_tag }}\n**Image**: \`${{ needs.pre-deploy-validation.outputs.image_tag }}\`\n**Strategy**: Zero-Downtime Rolling Update"
+            DEPLOYMENT_INFO="**URL**: https://${{ secrets.DOMAIN_NAME }}\n**Load Balancer IP**: ${{ needs.deploy-infrastructure.outputs.load_balancer_ip || 'N/A' }}\n**Manager IP**: ${{ needs.deploy-infrastructure.outputs.manager_ip }}\n**Version**: ${{ needs.pre-deploy-validation.outputs.version_tag }}\n**Image**: \`${{ needs.pre-deploy-validation.outputs.image_tag }}\`\n**Strategy**: Zero-Downtime Rolling Update"
           else
             DEPLOYMENT_INFO="**Status**: ${{ steps.final_status.outputs.status }}\n**Check**: [Workflow Logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n**Previous Health**: ${{ needs.pre-deploy-validation.outputs.current_deployment_health }}"
           fi

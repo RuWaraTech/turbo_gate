@@ -169,7 +169,7 @@ EOF
     
     # Get outputs
     MANAGER_IP=$(terraform output -raw manager_ip)
-    FLOATING_IP=$(terraform output -raw floating_ip)
+    LOAD_BALANCER_IP=$(terraform output -raw load_balancer_ip || echo "N/A")
     
     # Update SSH config with actual IP
     sed -i.bak "s/HostName PENDING/HostName ${MANAGER_IP}/" "${SSH_CONFIG_PATH}"
@@ -291,11 +291,8 @@ deploy_application() {
     log_info "Setting up Docker Swarm..."
     ansible-playbook ${ANSIBLE_ARGS} playbooks/setup-swarm.yml
     
-    # Setup NGINX
-    log_info "Setting up NGINX reverse proxy..."
-    ansible-playbook ${ANSIBLE_ARGS} playbooks/setup-nginx.yml \
-        -e "domain_name=${DOMAIN_NAME}" \
-        -e "admin_email=${ADMIN_EMAIL}"
+    # Setup Traefik with ModSecurity WAF
+    log_info "Setting up Traefik reverse proxy with ModSecurity WAF..."
     
     # Deploy application
     log_info "Deploying TurboGate application..."

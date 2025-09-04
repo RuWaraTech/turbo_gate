@@ -108,8 +108,8 @@ output "deployment_summary" {
     load_balancer      = var.enable_load_balancer ? "Enabled with SSL termination" : "Disabled"
     ssl_termination    = var.enable_load_balancer ? "Load Balancer" : "Backend servers"
     certificate_type   = var.ssl_certificate_type
-    traefik_waf_enabled = var.traefik_enabled ? "Yes (Coraza WAF)" : "No"
-    coraza_paranoia_level = var.traefik_enabled ? var.coraza_paranoia_level : "N/A"
+    traefik_waf_enabled = var.traefik_enabled ? "Yes (ModSecurity WAF)" : "No"
+    modsec_paranoia_level = var.traefik_enabled ? var.modsec_paranoia_level : "N/A"
     backend_protocol   = var.enable_load_balancer ? "HTTP" : "HTTPS"
     high_availability  = var.enable_load_balancer ? "Yes (${length(hcloud_server.worker) + 1} nodes)" : "No"
     server_type        = var.server_type
@@ -138,7 +138,7 @@ output "security_status" {
     ssh_firewall       = "Restricted to: ${join(", ", var.allowed_ssh_ips)}"
     fail2ban          = var.enable_security_hardening ? "Enabled" : "Disabled"
     network_encryption = "Docker Swarm TLS Enabled"
-    waf_protection    = var.traefik_enabled ? "Traefik + Coraza WAF Active" : "Disabled"
+    waf_protection    = var.traefik_enabled ? "Traefik + ModSecurity WAF Active" : "Disabled"
     ssl_certificates  = var.enable_load_balancer ? "Hetzner managed at Load Balancer" : "Self-managed"
     ssl_termination   = var.enable_load_balancer ? "Load Balancer" : "Backend servers"
     backend_exposure  = var.enable_load_balancer ? "HTTP only (private)" : "HTTPS (public)"

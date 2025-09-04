@@ -16,15 +16,6 @@ all:
           internal_ip: ${worker_internals[i]}
 %{ endfor ~}
         
-%{ if enable_load_balancer ~}
-    load_balancer:
-      hosts:
-        turbogate-lb:
-          ansible_host: ${load_balancer_ip}
-          ansible_user: root
-          internal_ip: ${load_balancer_internal}
-          ipv6_address: ${load_balancer_ipv6}
-%{ endif ~}
       
   vars:
     ansible_ssh_common_args: '-o StrictHostKeyChecking=no'
@@ -40,10 +31,10 @@ all:
     load_balancer_ipv6: ""
 %{ endif ~}
     
-    # Traefik + Coraza WAF configuration
+    # Traefik + ModSecurity WAF configuration
     traefik_enabled: ${traefik_enabled}
-    coraza_rule_engine: ${coraza_rule_engine}
-    coraza_paranoia_level: ${coraza_paranoia_level}
+    modsec_rule_engine: ${modsec_rule_engine}
+    modsec_paranoia_level: ${modsec_paranoia_level}
     traefik_dashboard_auth: ${traefik_dashboard_auth}
     rate_limit_average: ${rate_limit_average}
     rate_limit_burst: ${rate_limit_burst}

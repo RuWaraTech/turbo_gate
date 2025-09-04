@@ -2,7 +2,7 @@
 
 ### feat
 
-- replace Coraza WAF with external ModSecurity container & fix deployment issues
+- replace NGINX WAF with Traefik + ModSecurity container & fix deployment issues
 - migrate from NGINX WAF to Traefik with security middleware
 
 ### fix

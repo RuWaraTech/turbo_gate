@@ -15,24 +15,25 @@ services:
         target: /dynamic/tls.yaml
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /opt/turbogate/certs:/certs:ro
     environment:
       - TRAEFIK_LOG_LEVEL=INFO
     command:
       # HTTP EntryPoint (receives traffic from Load Balancer)
       - "--entrypoints.web.address=:80"
-      # Remove HTTPS redirect since LB handles TLS termination
-      # Attach dynamic configuration file for middlewares
+      # CRITICAL: Health check and API configuration
+      - "--api=true"
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      - "--ping=true"
+      - "--ping.entrypoint=web"
+      # File provider for dynamic configuration
       - "--providers.file.filename=/dynamic/tls.yaml"
       - "--providers.file.watch=true"
-      # Enable the Docker Swarm provider
+      # Docker Swarm provider
       - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
       - "--providers.swarm.watch=true"
       - "--providers.swarm.exposedbydefault=false"
-      - "--providers.swarm.network=turbogate_traefik_proxy"
-      # API & Dashboard
-      - "--api.dashboard=true"
-      - "--api.insecure=false"
+      - "--providers.swarm.network=traefik_proxy"
       # Observability
       - "--log.level=INFO"
       - "--accesslog=true"
@@ -92,7 +93,7 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping-entrypoint=web"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -101,20 +102,19 @@ services:
   modsecurity:
     image: owasp/modsecurity-crs:4.3.0-apache-alpine
     environment:
-      PARANOIA: {{ modsec_paranoia_level | default(1) }}
-      BACKEND: http://turbogate:5000
-      BACKEND_WS: ws://turbogate:5000
-      PORT: 80
-      MODSEC_AUDIT_LOG: /dev/stdout
-      MODSEC_AUDIT_LOG_FORMAT: JSON
-      MODSEC_RULE_ENGINE: {{ modsec_rule_engine | default('On') }}
-      MODSEC_REQ_BODY_ACCESS: 'On'
-      MODSEC_REQ_BODY_LIMIT: 13107200
-      MODSEC_REQ_BODY_NOFILES_LIMIT: 131072
-      MODSEC_RESP_BODY_ACCESS: 'On'
-      MODSEC_RESP_BODY_LIMIT: 524288
-      # Custom exclusions for health checks
-      EXCLUSIONS_FILE: /opt/owasp-crs/custom-exclusions.conf
+      PARANOIA: "{{ modsec_paranoia_level | default(1) }}"
+      BACKEND: "http://turbogate:5000"
+      BACKEND_WS: "ws://turbogate:5000"
+      PORT: "80"
+      MODSEC_AUDIT_LOG: "/dev/stdout"
+      MODSEC_AUDIT_LOG_FORMAT: "JSON"
+      MODSEC_RULE_ENGINE: "{{ modsec_rule_engine | default('On') }}"
+      MODSEC_REQ_BODY_ACCESS: "On"
+      MODSEC_REQ_BODY_LIMIT: "13107200"
+      MODSEC_REQ_BODY_NOFILES_LIMIT: "131072"
+      MODSEC_RESP_BODY_ACCESS: "On"
+      MODSEC_RESP_BODY_LIMIT: "524288"
+      EXCLUSIONS_FILE: "/opt/owasp-crs/custom-exclusions.conf"
     configs:
       - source: modsecurity_exclusions_v{{ resource_version }}
         target: /opt/owasp-crs/custom-exclusions.conf
@@ -125,6 +125,8 @@ services:
           - node.role == worker
           - node.labels.security_zone == dmz
           - node.labels.security_hardened == true
+        preferences:
+          - spread: node.id
       update_config:
         parallelism: 1
         delay: 30s
@@ -233,6 +235,9 @@ services:
       - LOG_LEVEL=INFO
       - DOMAIN_NAME={{ domain_name }}
       - VERSION={{ version | default('unknown') }}
+      - REDIS_SENTINEL_HOSTS=redis-sentinel:26379
+      - REDIS_SENTINEL_SERVICE=mymaster
+      - REDIS_USE_SENTINEL=true
     user: "1001:1001"
     tmpfs:
       - /tmp:uid=1001,gid=1001,mode=1777
@@ -254,7 +259,6 @@ services:
     networks:
       - turbogate_backend
       - turbogate_database
-      - traefik_proxy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
       interval: 15s
@@ -262,17 +266,19 @@ services:
       retries: 3
       start_period: 45s
     depends_on:
-      - redis
+      - redis-master
 
-  redis:
+  redis-master:
     image: redis:7-alpine
     deploy:
       replicas: 1
       placement:
         constraints: 
-          - node.role == manager
-          - node.labels.security_zone == dmz
+          - node.role == worker
+          - node.labels.security_zone == database
           - node.labels.security_hardened == true
+        preferences:
+          - spread: node.id
       restart_policy:
         condition: any
         delay: 5s
@@ -285,7 +291,7 @@ services:
           cpus: '0.1'
           memory: 128M
     entrypoint: ["/bin/sh", "-c"]
-    command: ["redis-server --requirepass \"$$(cat /run/secrets/redis_password)\" --maxmemory 200mb --maxmemory-policy allkeys-lru --save 900 1 --save 300 10"]
+    command: ["redis-server --requirepass \"$$(cat /run/secrets/redis_password)\" --maxmemory 200mb --maxmemory-policy allkeys-lru --save 900 1 --save 300 10 --port 6379"]
     user: "999:999"
     read_only: true
     tmpfs:
@@ -301,20 +307,128 @@ services:
     networks:
       - turbogate_database
     volumes:
-      - redis_data:/data
+      - redis_master_data:/data
     healthcheck:
-      test: ["CMD", "sh", "-c", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" ping"]
+      test: ["CMD", "sh", "-c", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" -p 6379 ping"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 20s
 
+  redis-replica:
+    image: redis:7-alpine
+    deploy:
+      replicas: 2
+      placement:
+        constraints: 
+          - node.role == worker
+          - node.labels.security_zone == database
+          - node.labels.security_hardened == true
+        preferences:
+          - spread: node.id
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["redis-server --requirepass \"$$(cat /run/secrets/redis_password)\" --masterauth \"$$(cat /run/secrets/redis_password)\" --replicaof redis-master 6379 --maxmemory 200mb --maxmemory-policy allkeys-lru --port 6379"]
+    user: "999:999"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    secrets:
+      - source: redis_password_v{{ resource_version }}
+        target: redis_password
+        mode: 0444
+    networks:
+      - turbogate_database
+    volumes:
+      - redis_replica_data:/data
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli --no-auth-warning -a \"$$(cat /run/secrets/redis_password)\" -p 6379 ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      - redis-master
+
+  redis-sentinel:
+    image: redis:7-alpine
+    deploy:
+      replicas: 3
+      placement:
+        constraints: 
+          - node.role == worker
+          - node.labels.security_zone == database
+          - node.labels.security_hardened == true
+        preferences:
+          - spread: node.id
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+        reservations:
+          cpus: '0.05'
+          memory: 64M
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      echo "port 26379
+      sentinel monitor mymaster redis-master 6379 2
+      sentinel auth-pass mymaster $$(cat /run/secrets/redis_password)
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 10000
+      sentinel parallel-syncs mymaster 1" > /tmp/sentinel.conf && 
+      redis-sentinel /tmp/sentinel.conf
+    user: "999:999"
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    secrets:
+      - source: redis_password_v{{ resource_version }}
+        target: redis_password
+        mode: 0444
+    networks:
+      - turbogate_database
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      - redis-master
+      - redis-replica
+
 volumes:
-  redis_data:
+  redis_master_data:
     driver_opts:
       type: none
       o: bind
-      device: /var/lib/turbogate/redis
+      device: /var/lib/turbogate/redis-master
+  redis_replica_data:
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/turbogate/redis-replica
 
 networks:
   turbogate_frontend:
