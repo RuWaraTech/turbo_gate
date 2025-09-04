@@ -1,3 +1,9 @@
+## v1.4.3 (2025-09-04)
+
+### fix
+
+- Correct ModSecurity backend service names for Docker Swarm
+
 ## v1.4.2 (2025-09-04)
 
 ### fix
