@@ -17,10 +17,7 @@
 
     - name: Install required packages
       ansible.builtin.package:
-        name:
-          - curl
-          - python3-pip
-          - netcat
+        name: [curl, python3-pip, netcat]
         state: present
 
     - name: Check if Docker is already installed
@@ -43,11 +40,6 @@
         creates: /usr/bin/docker
       when: docker_installed.rc != 0
 
-    - name: Remove Docker installation script
-      ansible.builtin.file:
-        path: /tmp/get-docker.sh
-        state: absent
-
     - name: Ensure Docker service is running and enabled
       ansible.builtin.systemd:
         name: docker
@@ -57,9 +49,7 @@
 
     - name: Install Python Docker SDK
       ansible.builtin.pip:
-        name:
-          - jsondiff
-          - docker>=6.0.0
+        name: [jsondiff, "docker>=6.0.0"]
         state: present
 
     - name: Check current swarm status of the node
@@ -93,24 +83,22 @@
         state: join
         advertise_addr: "{{ swarm_advertise_addr }}"
         join_token: "{{ hostvars[groups['swarm_managers'][0]]['docker_worker_token'] }}"
-        remote_addrs:
-          - "{{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}:2377"
-        timeout: 60
+        remote_addrs: ["{{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}:2377"]
       when:
         - "'swarm_workers' in group_names"
         - swarm_state.stdout == "inactive"
         - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined
-      retries: "{{ join_retries }}"
-      delay: "{{ join_retry_delay }}"
-      until: "join_result is success"
-      register: join_result
 
-    # --- FIX: Wait for Swarm to stabilize ---
-    - name: Wait for Swarm cluster to stabilize
-      ansible.builtin.pause:
-        seconds: 15
+    # --- NEW ROBUST FIX: Wait for all nodes to be ready ---
+    - name: Wait until all worker nodes are registered and ready on the manager
+      ansible.builtin.shell: "docker node ls --format '{{ '{{' }}.Hostname {{ '}}' }} {{ '{{' }}.Status {{ '}}' }}'"
+      register: node_status
+      until: "node_status.stdout.split('\\n') | select('match', 'Ready') | list | length == (groups['swarm_managers'] | length) + (groups['swarm_workers'] | length)"
+      retries: 10
+      delay: 10
       run_once: true
-      when: join_result is changed
+      delegate_to: "{{ groups['swarm_managers'][0] }}"
+      changed_when: false
 
     - name: Create shared external overlay networks
       community.docker.docker_network:
@@ -131,18 +119,16 @@
           security_zone: "{{ 'dmz' if 'swarm_managers' in group_names else 'internal' }}"
       delegate_to: "{{ groups['swarm_managers'][0] }}"
 
-    - name: Verify cluster status and display node labels
-      ansible.builtin.command: "docker node inspect {{ item }} --format '{{ '{{' }}.Description.Hostname {{ '}}' }} -> Labels: {{ '{{' }}.Spec.Labels {{ '}}' }}'"
-      register: node_labels
-      loop: "{{ ansible_play_hosts_all }}"
-      changed_when: false
+    - name: Display final cluster status and labels
+      ansible.builtin.command: "docker node ls"
+      register: final_node_ls
       run_once: true
       delegate_to: "{{ groups['swarm_managers'][0] }}"
+      changed_when: false
 
-    - name: Display final cluster status and labels
+    - name: Print cluster status
       ansible.builtin.debug:
-        msg: "{{ item.stdout_lines }}"
-      loop: "{{ node_labels.results }}"
+        var: final_node_ls.stdout_lines
       run_once: true
 
     - name: Final success message
