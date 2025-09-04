@@ -193,6 +193,15 @@
       failed_when: false
       changed_when: false
 
+    - name: Force leave swarm if in error state (workers only)
+      community.docker.docker_swarm:
+        state: absent
+        force: true
+      when:
+        - "'swarm_workers' in group_names"
+        - swarm_state.stdout == "error"
+      failed_when: false
+
     - name: Join workers to swarm
       community.docker.docker_swarm:
         state: join
@@ -203,7 +212,7 @@
         timeout: 60
       when:
         - "'swarm_workers' in group_names"
-        - swarm_state.stdout == "inactive"
+        - swarm_state.stdout in ["inactive", "error"]
         - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined
       register: join_result
       retries: "{{ join_retries }}"
