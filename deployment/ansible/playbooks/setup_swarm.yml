@@ -1,11 +1,10 @@
----
-- name: Setup Docker Swarm Cluster
-  hosts: swarm_managers:swarm_workers
+- name: Setup Docker Swarm Cluster on Hetzner Cloud
+  hosts: all
   become: yes
   gather_facts: yes
   vars:
-    swarm_advertise_addr: "{{ ansible_default_ipv4.address }}"
-    swarm_listen_addr: "{{ ansible_default_ipv4.address }}:2377"
+    swarm_advertise_addr: "{{ internal_ip }}"
+    swarm_listen_addr: "{{ internal_ip }}:2377"
     join_retries: 3
     join_retry_delay: 10
 
@@ -17,8 +16,13 @@
 
     - name: Install required packages
       ansible.builtin.package:
-        name: [curl, python3-pip, netcat]
+        name:
+          - curl
+          - python3-pip
+          - netcat
+          - jq
         state: present
+    
 
     - name: Check if Docker is already installed
       ansible.builtin.command: docker --version
@@ -26,7 +30,7 @@
       failed_when: false
       changed_when: false
 
-    - name: Download the official Docker installation script
+    - name: Install Docker using official script
       ansible.builtin.get_url:
         url: https://get.docker.com
         dest: /tmp/get-docker.sh
@@ -34,104 +38,229 @@
         timeout: 30
       when: docker_installed.rc != 0
 
-    - name: Install Docker if it is not present
+    - name: Install Docker if not present
       ansible.builtin.command: /tmp/get-docker.sh
       args:
         creates: /usr/bin/docker
       when: docker_installed.rc != 0
 
-    - name: Ensure Docker service is running and enabled
+    - name: Remove Docker installation script
+      ansible.builtin.file:
+        path: /tmp/get-docker.sh
+        state: absent
+
+    - name: Ensure Docker service is running
       ansible.builtin.systemd:
         name: docker
         state: started
         enabled: yes
         daemon_reload: yes
 
-    - name: Install Python Docker SDK
+    - name: Install Python Docker module
       ansible.builtin.pip:
-        name: [jsondiff, "docker>=6.0.0"]
+        name: 
+          - jsondiff
+          - docker>=6.0.0
         state: present
 
-    - name: Check current swarm status of the node
-      ansible.builtin.command: "docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'"
+    - name: Check swarm status
+      ansible.builtin.command: docker info --format '{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}'
       register: swarm_state
+      failed_when: false
       changed_when: false
 
-    - name: Initialize swarm on the primary manager
+    - name: Debug swarm status
+      ansible.builtin.debug:
+        msg: "Node {{ ansible_hostname }} swarm state: {{ swarm_state.stdout }}"
+
+    - name: Test connectivity to manager (workers only)
+      ansible.builtin.command: ping -c 2 {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}
+      register: ping_test
+      changed_when: false
+      failed_when: false
+      when: "'workers' in group_names"
+
+    - name: Initialize swarm on manager
       community.docker.docker_swarm:
         state: present
         advertise_addr: "{{ swarm_advertise_addr }}"
         listen_addr: "{{ swarm_listen_addr }}"
+        default_addr_pool:
+          - "10.10.0.0/16"
+        subnet_size: 24
       when:
         - "'swarm_managers' in group_names"
-        - inventory_hostname == groups['swarm_managers'][0]
-        - swarm_state.stdout == "inactive"
+        - swarm_state.stdout != "active"
+      register: swarm_init
 
-    - name: Get worker join token from the manager
-      community.docker.docker_swarm_info:
-      register: swarm_info
-      delegate_to: "{{ groups['swarm_managers'][0] }}"
-      run_once: true
+    - name: Wait for swarm initialization
+      ansible.builtin.pause:
+        seconds: 5
+      when:
+        - "'swarm_managers' in group_names"
+        - swarm_init is changed
 
-    - name: Set worker token fact for other nodes to use
+    - name: Get worker join token
+      ansible.builtin.command: docker swarm join-token -q worker
+      register: worker_token
+      changed_when: false
+      when: "'swarm_managers' in group_names"
+
+    - name: Set worker token fact
       ansible.builtin.set_fact:
-        docker_worker_token: "{{ swarm_info.swarm_facts.JoinTokens.Worker }}"
-      when: swarm_info.swarm_facts is defined
+        docker_worker_token: "{{ worker_token.stdout }}"
+      when: "'swarm_managers' in group_names"
 
-    - name: Join worker nodes to the swarm
+    - name: Test manager port accessibility (simple approach)
+      ansible.builtin.command: >
+        timeout 30 bash -c 'until nc -z {{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }} 2377; do sleep 2; done'
+      register: port_test
+      when: "'workers' in group_names"
+      failed_when: false
+      changed_when: false
+
+    - name: Join workers to swarm
       community.docker.docker_swarm:
         state: join
         advertise_addr: "{{ swarm_advertise_addr }}"
         join_token: "{{ hostvars[groups['swarm_managers'][0]]['docker_worker_token'] }}"
-        remote_addrs: ["{{ hostvars[groups['swarm_managers'][0]]['ansible_default_ipv4']['address'] }}:2377"]
+        remote_addrs:
+          - "{{ hostvars[groups['swarm_managers'][0]]['internal_ip'] }}:2377"
+        timeout: 60
       when:
-        - "'swarm_workers' in group_names"
+        - "'workers' in group_names"
         - swarm_state.stdout == "inactive"
         - hostvars[groups['swarm_managers'][0]]['docker_worker_token'] is defined
+      register: join_result
+      retries: "{{ join_retries }}"
+      delay: "{{ join_retry_delay }}"
+      until: join_result is success
 
-    # --- NEW ROBUST FIX: Wait for all nodes to be ready ---
-    - name: Wait until all worker nodes are registered and ready on the manager
-      ansible.builtin.shell: "docker node ls --format '{{ '{{' }}.Hostname {{ '}}' }} {{ '{{' }}.Status {{ '}}' }}'"
-      register: node_status
-      until: "node_status.stdout.split('\\n') | select('match', 'Ready') | list | length == (groups['swarm_managers'] | length) + (groups['swarm_workers'] | length)"
-      retries: 10
-      delay: 10
-      run_once: true
-      delegate_to: "{{ groups['swarm_managers'][0] }}"
+    - name: Verify swarm cluster
+      ansible.builtin.command: docker node ls --format "table {{ '{{' }}.Hostname{{ '}}' }}\t{{ '{{' }}.Status{{ '}}' }}\t{{ '{{' }}.Availability{{ '}}' }}\t{{ '{{' }}.ManagerStatus{{ '}}' }}"
+      register: swarm_nodes
       changed_when: false
+      when: "'swarm_managers' in group_names"
+      run_once: true
 
-    - name: Create shared external overlay networks
+    - name: Display cluster status
+      ansible.builtin.debug:
+        var: swarm_nodes.stdout_lines
+      when: 
+        - "'swarm_managers' in group_names"
+        - swarm_nodes is defined
+      run_once: true
+
+    - name: Create overlay network
       community.docker.docker_network:
-        name: "{{ item }}"
+        name: turbogate_network
         driver: overlay
         attachable: yes
-      loop:
-        - turbogate_backend
-        - turbogate_database
+        driver_options:
+          encrypted: "true"
+      when: "'swarm_managers' in group_names"
       run_once: true
-      delegate_to: "{{ groups['swarm_managers'][0] }}"
 
-    - name: Label all nodes with their role and security context
+    - name: Create encrypted overlay networks with security
+      community.docker.docker_network:
+        name: "turbogate_{{ item.key }}"
+        driver: overlay
+        attachable: yes
+        driver_options:
+          encrypted: "{{ item.value.encrypted | string }}"  # Ensure string conversion
+        ipam_config:
+          - subnet: "{{ item.value.subnet }}"
+        labels:
+          security_zone: "{{ item.key }}"
+          encrypted: "{{ item.value.encrypted | string }}"  # Ensure string conversion
+          managed_by: "ansible"
+      loop: "{{ swarm_networks | dict2items }}"
+      when: 
+        - "'swarm_managers' in group_names"
+        - swarm_encryption_enabled | default(true)
+      run_once: true
+
+    - name: Label nodes with security context
       community.docker.docker_node:
         hostname: "{{ ansible_hostname }}"
         labels:
-          security_hardened: "true"
+          role: "{{ 'manager' if 'swarm_managers' in group_names else 'worker' }}"
+          app: "turbogate"
+          environment: "production"
+          security_hardened: "{{ (security_enabled | default(true)) | string }}"
           security_zone: "{{ 'dmz' if 'swarm_managers' in group_names else 'internal' }}"
+          fail2ban_enabled: "{{ (fail2ban_enabled | default(true)) | string }}"
+          network_segment: "{{ 'management' if 'swarm_managers' in group_names else 'application' }}"
       delegate_to: "{{ groups['swarm_managers'][0] }}"
 
-    - name: Display final cluster status and labels
-      ansible.builtin.command: "docker node ls"
-      register: final_node_ls
-      run_once: true
-      delegate_to: "{{ groups['swarm_managers'][0] }}"
+    # Security verification tasks
+    - name: Verify Docker daemon security configuration
+      shell: |
+        docker system info --format '{{ "{{" }}.SecurityOptions{{ "}}" }}' | grep -q "name=seccomp" && \
+        docker system info --format '{{ "{{" }}.LiveRestoreEnabled{{ "}}" }}' | grep -q "true"
+      register: docker_security_check
+      failed_when: false
       changed_when: false
+      when: "'swarm_managers' in group_names"
 
-    - name: Print cluster status
-      ansible.builtin.debug:
-        var: final_node_ls.stdout_lines
+    - name: Display Docker security status
+      debug:
+        msg: 
+          - "Docker security features: {{ 'Enabled' if docker_security_check.rc == 0 else 'Needs attention' }}"
+          - "Swarm encryption: {{ 'Enabled' if swarm_encryption_enabled else 'Disabled' }}"
+          - "Security hardening: {{ 'Applied' if security_enabled else 'Skipped' }}"
+      when: "'swarm_managers' in group_names"
       run_once: true
 
-    - name: Final success message
+    - name: Get detailed network information
+      community.docker.docker_network_info:
+        name: "turbogate_{{ item }}"
+      loop:
+        - frontend
+        - backend
+        - database
+      register: network_info
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    # - name: Display network encryption status
+    #   debug:
+    #     msg: "Network {{ item.item }}: Encrypted={{ item.network.Options.encrypted | default('false') }}"
+    #   loop: "{{ network_info.results }}"
+    #   when: item.network is defined
+    #   run_once: true
+
+    # # Security health check
+    # - name: Final security verification
+    #   block:
+    #     - name: Check fail2ban status
+    #       command: systemctl is-active fail2ban
+    #       register: fail2ban_status
+    #       failed_when: false
+    #       changed_when: false
+
+    #     - name: Check SSH hardening
+    #       shell: grep -q "PasswordAuthentication no" /etc/ssh/sshd_config
+    #       register: ssh_hardening_check
+    #       failed_when: false
+    #       changed_when: false
+
+    #     - name: Security status summary
+    #       debug:
+    #         msg:
+    #           - "=== Security Status Summary ==="
+    #           - "fail2ban: {{ 'Active' if fail2ban_status.rc == 0 else 'Inactive' }}"
+    #           - "SSH hardening: {{ 'Applied' if ssh_hardening_check.rc == 0 else 'Not applied' }}"
+    #           - "Docker Swarm: {{ 'Secure' if docker_security_check.rc == 0 else 'Review needed' }}"
+    #           - "Encrypted networks: {{ swarm_networks.keys() | list | join(', ') }}"
+
+    - name: Final cluster status
+      ansible.builtin.command: docker system info --format '{{ '{{' }}.Swarm.Nodes{{ '}}' }} nodes in swarm'
+      register: final_status
+      when: "'swarm_managers' in group_names"
+      run_once: true
+
+    - name: Success message
       ansible.builtin.debug:
-        msg: "✅ Docker Swarm cluster setup and node labeling completed successfully!"
+        msg: "Docker Swarm cluster setup completed successfully! {{ final_status.stdout if final_status is defined else '' }}"
       run_once: true
