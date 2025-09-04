@@ -1,3 +1,9 @@
+## v1.4.1 (2025-09-04)
+
+### fix
+
+- Handle worker nodes in 'error' state during swarm join
+
 ## v1.4.0 (2025-09-04)
 
 ### feat

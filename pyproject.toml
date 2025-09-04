@@ -77,7 +77,7 @@ health-check = "scripts.health_check:main"
 name = "cz_customize"
 tag_format = "v$version"
 version_scheme = "semver2"
-version = "1.4.0"
+version = "1.4.1"
 version_files = [
     "pyproject.toml:version",
     "gateway_service/__init__.py:__version__"
