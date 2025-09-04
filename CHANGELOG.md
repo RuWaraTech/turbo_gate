@@ -1,3 +1,9 @@
+## v1.4.7 (2025-09-04)
+
+### fix
+
+- changing to ipAllowList Middleware "admin-whitelist@file" of type IPWhiteList is deprecated, please use IPAllowList instead.
+
 ## v1.4.6 (2025-09-04)
 
 ### fix
