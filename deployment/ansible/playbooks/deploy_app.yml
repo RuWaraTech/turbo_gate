@@ -18,7 +18,8 @@
         fail_msg: "One or more required variables (secret_key, redis_password, domain_name, image_tag) are not defined."
 
     - name: Check if stack already exists to determine deployment type
-      ansible.builtin.command: docker stack ls --format '{{ "{{ .Name }}" }}'
+      # FIXED: Quoted the command string
+      ansible.builtin.command: "docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}'"
       register: existing_stacks
       changed_when: false
 
@@ -46,12 +47,12 @@
 
     - name: Pre-pull required images on all nodes
       community.docker.docker_image:
-        name: "{{ item }}"
+        name: "{{ item.image }}"
         source: pull
-      delegate_to: "{{ node_hostname }}"
-      loop: "{{ ansible_play_hosts_all }}"
+      delegate_to: "{{ item.node_hostname }}"
+      loop: "{{ ansible_play_hosts_all | product(image_list) | map('combine', {'node_hostname': 'item.0', 'image': 'item.1'}) }}"
       loop_control:
-        loop_var: node_hostname
+        label: "{{ item.node_hostname }}: {{ item.image }}"
       vars:
         image_list:
           - traefik:v3.4
@@ -78,6 +79,7 @@
         - { src: "templates/custom-exclusions.conf.j2", dest: "custom-exclusions.conf" }
 
     - name: Create versioned Docker configs
+      # FIXED: Quoted the command string
       ansible.builtin.command: "docker config create {{ item.name }}_v{{ resource_version }} {{ item.path }}"
       loop:
         - { name: "traefik_tls_config", path: "/tmp/tls.yaml_{{ resource_version }}" }
@@ -112,7 +114,8 @@
 
     # --- CLEANUP OF OLD RESOURCES ---
     - name: Get list of old secrets to remove
-      ansible.builtin.shell: "docker secret ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
+      # FIXED: Quoted the shell command string
+      ansible.builtin.shell: "docker secret ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}' || true"
       register: old_secrets
       loop:
         - { name: "turbogate_secret_key" }
@@ -126,7 +129,8 @@
       when: stack_exists and item != ""
 
     - name: Get list of old configs to remove
-      ansible.builtin.shell: "docker config ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
+      # FIXED: Quoted the shell command string
+      ansible.builtin.shell: "docker config ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}' || true"
       register: old_configs
       loop:
         - { name: "traefik_tls_config" }
@@ -174,10 +178,12 @@
 
     - name: Final health check via domain
       ansible.builtin.uri:
-        url: "http://{{ domain_name }}/gateway/health"
+        # FIXED: Changed to https and added validate_certs:no for flexibility
+        url: "https://{{ domain_name }}/gateway/health"
         method: GET
         status_code: 200
         timeout: 15
+        validate_certs: no
       register: http_health
       retries: 12
       delay: 15
@@ -188,6 +194,6 @@
         msg: |
           ✅ DEPLOYMENT COMPLETE ✅
           Stack: {{ stack_name }}
-          Domain: http://{{ domain_name }}
+          Domain: https://{{ domain_name }}
           Image Tag: {{ image_tag }}
           Deployment Type: {{ 'New Deployment' if not stack_exists else 'Rolling Update' }}

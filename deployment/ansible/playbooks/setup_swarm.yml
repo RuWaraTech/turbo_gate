@@ -126,7 +126,7 @@
       delegate_to: "{{ groups['swarm_managers'][0] }}"
 
     - name: Verify cluster status and display node labels
-      ansible.builtin.command: docker node inspect {{ item }} --format '{{ "{{ .Description.Hostname }}" }} -> Labels: {{ "{{ .Spec.Labels }}" }}'
+      ansible.builtin.command: "docker node inspect {{ item }} --format '{{ '{{' }}.Description.Hostname {{ '}}' }} -> Labels: {{ '{{' }}.Spec.Labels {{ '}}' }}'"
       register: node_labels
       loop: "{{ ansible_play_hosts_all }}"
       changed_when: false
@@ -135,7 +135,7 @@
 
     - name: Display final cluster status and labels
       ansible.builtin.debug:
-        var: item.stdout
+        msg: "{{ item.stdout_lines }}"
       loop: "{{ node_labels.results }}"
       run_once: true
 
