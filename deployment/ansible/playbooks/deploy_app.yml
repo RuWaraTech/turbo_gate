@@ -1,11 +1,12 @@
-- name: Deploy TurboGate with Load Balancer SSL Termination
+---
+- name: Deploy TurboGate Application Stack
   hosts: swarm_managers
   become: yes
-  
+
   vars:
     stack_name: turbogate
     compose_file: /opt/turbogate/docker-compose-waf.yml
-    
+
   tasks:
     - name: Validate required variables
       ansible.builtin.assert:
@@ -14,89 +15,51 @@
           - redis_password is defined
           - domain_name is defined
           - image_tag is defined
-          - ssl_certificate_type == "managed"
-        fail_msg: "Required variables must be defined and ssl_certificate_type must be 'managed' for LB SSL termination"
+        fail_msg: "One or more required variables (secret_key, redis_password, domain_name, image_tag) are not defined."
 
-    - name: Verify Load Balancer is reachable
-      ansible.builtin.uri:
-        url: "https://{{ domain_name }}/lb-health"
-        method: GET
-        timeout: 10
-        validate_certs: yes
-        status_code: [200, 502, 503]
-      register: lb_ssl_check
-      retries: 10
-      delay: 30
-      until: lb_ssl_check.status != -1
-
-    - name: Create required directories on manager node
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        state: directory
-        owner: "{{ item.owner }}"
-        group: "{{ item.group }}"
-        mode: "{{ item.mode }}"
-      loop:
-        - { path: "/opt/turbogate", owner: "root", group: "root", mode: "0755" }
-        - { path: "/var/log/turbogate", owner: "root", group: "root", mode: "0755" }
-        - { path: "/var/lib/turbogate/redis", owner: "999", group: "999", mode: "0755" }
-        - { path: "/var/log/traefik", owner: "root", group: "root", mode: "0755" }
-        - { path: "/opt/turbogate/certs", owner: "root", group: "root", mode: "0755" }
-
-    - name: Get the list of all swarm node hostnames
-      ansible.builtin.command: docker node ls --format '{{ '{{' }}.Hostname{{ '}}' }}'
-      register: swarm_node_hostnames
-      changed_when: false
-      run_once: true
-
-    - name: Create Traefik directories on ALL swarm nodes
-      ansible.builtin.file:
-        path: "{{ item.1.path }}"
-        state: directory
-        owner: "{{ item.1.owner }}"
-        group: "{{ item.1.group }}"
-        mode: "{{ item.1.mode }}"
-      delegate_to: "{{ item.0 }}"
-      delegate_facts: true
-      loop: "{{ swarm_node_hostnames.stdout_lines | product(traefik_directories) | list }}"
-      vars:
-        traefik_directories:
-          - { path: "/var/log/traefik", owner: "root", group: "root", mode: "0755" }
-          - { path: "/opt/turbogate/certs", owner: "root", group: "root", mode: "0755" }
-
-    - name: Pre-pull required images on all nodes
-      ansible.builtin.command: docker image pull {{ image }}
-      delegate_to: "{{ node_hostname }}"
-      loop: "{{ swarm_node_hostnames.stdout_lines | product(image_list) | list }}"
-      loop_control:
-        label: "{{ item.0 }}:{{ item.1 }}"
-      vars:
-        node_hostname: "{{ item.0 }}"
-        image: "{{ item.1 }}"
-        image_list:
-          - traefik:v3.4
-          - "{{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag | default('latest') }}"
-          - redis:7-alpine
-
-    # ===================================================================
-    # BEGIN: SIMPLIFIED SECRET & CONFIG MANAGEMENT (NON-VERSIONED)
-    # ===================================================================
-    - name: Check if stack already exists
-      ansible.builtin.command: docker stack ls --format '{{ '{{' }}.Name{{ '}}' }}'
+    - name: Check if stack already exists to determine deployment type
+      ansible.builtin.command: docker stack ls --format '{{ "{{ .Name }}" }}'
       register: existing_stacks
       changed_when: false
-      failed_when: false
 
     - name: Set fact for stack existence
       ansible.builtin.set_fact:
         stack_exists: "{{ stack_name in existing_stacks.stdout_lines }}"
 
-    # --- SECRET MANAGEMENT ---
     - name: Get current timestamp for versioning resources
       ansible.builtin.set_fact:
         resource_version: "{{ ansible_date_time.epoch }}"
       run_once: true
 
+    - name: Create required directories on manager node
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default('root') }}"
+        group: "{{ item.group | default('root') }}"
+        mode: "{{ item.mode | default('0755') }}"
+      loop:
+        - { path: "/opt/turbogate" }
+        - { path: "/opt/turbogate/dynamic" }
+        - { path: "/var/log/turbogate" }
+        - { path: "/var/lib/turbogate/redis", owner: "999", group: "999" }
+
+    - name: Pre-pull required images on all nodes
+      community.docker.docker_image:
+        name: "{{ item }}"
+        source: pull
+      delegate_to: "{{ node_hostname }}"
+      loop: "{{ ansible_play_hosts_all }}"
+      loop_control:
+        loop_var: node_hostname
+      vars:
+        image_list:
+          - traefik:v3.4
+          - owasp/modsecurity-crs:4.3.0-apache-alpine
+          - "{{ docker_registry | default('docker.io') }}/{{ image_name | default('fwande/turbogate') }}:{{ image_tag }}"
+          - redis:7-alpine
+
+    # --- SECRET & CONFIG MANAGEMENT ---
     - name: Create new versioned Docker secrets
       ansible.builtin.shell:
         cmd: "echo -n \"{{ item.value }}\" | docker secret create {{ item.name }}_v{{ resource_version }} -"
@@ -105,26 +68,6 @@
         - { name: "redis_password", value: "{{ redis_password }}" }
       no_log: true
 
-    # --- CONFIG MANAGEMENT ---
-    - name: Create Traefik directories
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-      loop:
-        - /opt/turbogate/certs
-        - /opt/turbogate/dynamic
-
-    - name: Create self-signed certificate for Traefik
-      ansible.builtin.shell: |
-        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-          -keyout /opt/turbogate/certs/local.key -out /opt/turbogate/certs/local.crt \
-          -subj "/CN=*.{{ domain_name }}"
-      args:
-        creates: /opt/turbogate/certs/local.crt
-
     - name: Create versioned config files from templates
       ansible.builtin.template:
         src: "{{ item.src }}"
@@ -132,29 +75,23 @@
         mode: '0644'
       loop:
         - { src: "templates/tls.yaml.j2", dest: "tls.yaml" }
-        - { src: "templates/custom-exclusions.conf", dest: "custom-exclusions.conf" }
+        - { src: "templates/custom-exclusions.conf.j2", dest: "custom-exclusions.conf" }
 
     - name: Create versioned Docker configs
-      ansible.builtin.command: docker config create {{ item.name }}_v{{ resource_version }} {{ item.path }}
+      ansible.builtin.command: "docker config create {{ item.name }}_v{{ resource_version }} {{ item.path }}"
       loop:
         - { name: "traefik_tls_config", path: "/tmp/tls.yaml_{{ resource_version }}" }
         - { name: "modsecurity_exclusions", path: "/tmp/custom-exclusions.conf_{{ resource_version }}" }
-    # ===================================================================
-    # END: SIMPLIFIED SECRET & CONFIG MANAGEMENT
-    # ===================================================================
 
-    - name: Create overlay networks if they do not exist
+    # --- NETWORK MANAGEMENT ---
+    - name: Create stack-specific overlay network if it does not exist
       community.docker.docker_network:
-        name: "{{ item }}"
+        name: "traefik_proxy"
         driver: overlay
         attachable: yes
-      loop:
-        - turbogate_frontend
-        - turbogate_backend
-        - turbogate_database
-        - traefik_proxy
 
-    - name: Create Docker Compose file from template for deployment
+    # --- DEPLOYMENT ---
+    - name: Create Docker Compose file from template
       ansible.builtin.template:
         src: docker-compose-waf.yml.j2
         dest: "{{ compose_file }}"
@@ -173,9 +110,7 @@
       ansible.builtin.pause:
         seconds: 45
 
-    # ===================================================================
-    # BEGIN: CLEANUP OF OLD RESOURCES
-    # ===================================================================
+    # --- CLEANUP OF OLD RESOURCES ---
     - name: Get list of old secrets to remove
       ansible.builtin.shell: "docker secret ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
       register: old_secrets
@@ -183,13 +118,12 @@
         - { name: "turbogate_secret_key" }
         - { name: "redis_password" }
       changed_when: false
-      failed_when: false
       when: stack_exists
 
     - name: Remove old versioned secrets
       ansible.builtin.command: "docker secret rm {{ item }}"
       loop: "{{ old_secrets.results | map(attribute='stdout_lines') | flatten }}"
-      when: stack_exists and old_secrets.results is defined and item != ""
+      when: stack_exists and item != ""
 
     - name: Get list of old configs to remove
       ansible.builtin.shell: "docker config ls --filter 'name={{ item.name }}' --format '{{ '{{' }}.Name{{ '}}' }}' | grep -v 'v{{ resource_version }}'"
@@ -198,61 +132,62 @@
         - { name: "traefik_tls_config" }
         - { name: "modsecurity_exclusions" }
       changed_when: false
-      failed_when: false
       when: stack_exists
 
     - name: Remove old versioned configs
       ansible.builtin.command: "docker config rm {{ item }}"
       loop: "{{ old_configs.results | map(attribute='stdout_lines') | flatten }}"
-      when: stack_exists and old_configs.results is defined and item != ""
+      when: stack_exists and item != ""
 
     - name: Clean up temporary config files from manager
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "/tmp/{{ item }}_{{ resource_version }}"
         state: absent
       loop:
-        - "/tmp/tls.yaml_{{ resource_version }}"
-        - "/tmp/custom-exclusions.conf_{{ resource_version }}"
-    # ===================================================================
-    # END: CLEANUP
-    # ===================================================================
+        - "tls.yaml"
+        - "custom-exclusions.conf"
 
-    - name: Verify ModSecurity WAF service is running properly
+    # --- VERIFICATION ---
+    - name: Verify application services are running properly
       ansible.builtin.shell: |
-        replicas=$(docker service ls --filter name={{ stack_name }}_modsecurity --format '{{ '{{' }}.Replicas{{ '}}' }}')
+        replicas=$(docker service ls --filter name={{ stack_name }}_{{ item }} --format '{{ '{{' }}.Replicas{{ '}}' }}')
         if [ -z "$replicas" ]; then
-          echo "ERROR: modsecurity service not found"
+          echo "ERROR: {{ item }} service not found"
           exit 1
         fi
         running=$(echo $replicas | cut -d'/' -f1)
         desired=$(echo $replicas | cut -d'/' -f2)
         if [ "$running" != "$desired" ] || [ "$running" -lt "1" ]; then
-          echo "ERROR: modsecurity service not running properly. Replicas: $replicas"
-          docker service ps {{ stack_name }}_modsecurity --no-trunc
+          echo "ERROR: {{ item }} service not running properly. Replicas: $replicas"
+          docker service ps {{ stack_name }}_{{ item }} --no-trunc
           exit 1
         fi
-        echo "✅ ModSecurity WAF service running with replicas: $replicas"
-      register: modsec_service_check
+        echo "✅ {{ item }} service running with replicas: $replicas"
+      loop:
+        - modsecurity
+        - turbogate
+        - traefik
+      register: service_check
       retries: 6
       delay: 10
-      until: modsec_service_check.rc == 0
+      until: service_check.rc == 0
 
-    - name: Final health check via Load Balancer
+    - name: Final health check via domain
       ansible.builtin.uri:
-        url: "https://{{ domain_name }}/gateway/health"
+        url: "http://{{ domain_name }}/gateway/health"
         method: GET
         status_code: 200
         timeout: 15
-        validate_certs: yes
-      register: lb_https_health
+      register: http_health
       retries: 12
       delay: 15
-      until: lb_https_health.status == 200
+      until: http_health.status == 200
 
     - name: Display deployment summary
       ansible.builtin.debug:
         msg: |
           ✅ DEPLOYMENT COMPLETE ✅
           Stack: {{ stack_name }}
-          Domain: https://{{ domain_name }}
+          Domain: http://{{ domain_name }}
+          Image Tag: {{ image_tag }}
           Deployment Type: {{ 'New Deployment' if not stack_exists else 'Rolling Update' }}

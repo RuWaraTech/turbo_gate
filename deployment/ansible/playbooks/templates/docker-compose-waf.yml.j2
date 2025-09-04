@@ -254,7 +254,6 @@ services:
     networks:
       - turbogate_backend
       - turbogate_database
-      - traefik_proxy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/gateway/health"]
       interval: 15s
@@ -269,7 +268,7 @@ services:
     deploy:
       replicas: 1
       placement:
-        constraints: 
+        constraints:
           - node.role == manager
           - node.labels.security_zone == dmz
           - node.labels.security_hardened == true
@@ -317,10 +316,8 @@ volumes:
       device: /var/lib/turbogate/redis
 
 networks:
-  turbogate_frontend:
-    external: true
   turbogate_backend:
-    external: true  
+    external: true
   turbogate_database:
     external: true
   traefik_proxy:
