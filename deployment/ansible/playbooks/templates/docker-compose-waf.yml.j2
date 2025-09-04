@@ -32,7 +32,7 @@ services:
       - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
       - "--providers.swarm.watch=true"
       - "--providers.swarm.exposedbydefault=false"
-      - "--providers.swarm.network=traefik_proxy"
+      - "--providers.swarm.network=turbogate_traefik_proxy"
       # Observability
       - "--log.level=INFO"
       - "--accesslog=true"
@@ -99,12 +99,12 @@ services:
       start_period: 30s
 
   modsecurity:
-    image: owasp/modsecurity-crs:4.3.0-apache-alpine
+    image: owasp/modsecurity-crs:apache
     environment:
       PARANOIA: "{{ modsec_paranoia_level | default(1) }}"
-      BACKEND: "http://turbogate:5000"
-      BACKEND_WS: "ws://turbogate:5000"
-      PORT: "80"
+      BACKEND: "http://turbogate_turbogate:5000"
+      BACKEND_WS: "ws://turbogate_turbogate:5000"
+      PORT: "8080"
       MODSEC_AUDIT_LOG: "/dev/stdout"
       MODSEC_AUDIT_LOG_FORMAT: "JSON"
       MODSEC_RULE_ENGINE: "{{ modsec_rule_engine | default('On') }}"
@@ -162,7 +162,7 @@ services:
         - "traefik.http.routers.modsecurity-api.middlewares=rate-limit-api@file,security-headers@file,request-limit@file"
         - "traefik.http.routers.modsecurity-api.priority=90"
         # Service configuration
-        - "traefik.http.services.modsecurity.loadbalancer.server.port=80"
+        - "traefik.http.services.modsecurity.loadbalancer.server.port=8080"
         - "traefik.http.services.modsecurity.loadbalancer.healthcheck.path=/gateway/health"
         - "traefik.http.services.modsecurity.loadbalancer.healthcheck.interval=15s"
         - "traefik.http.services.modsecurity.loadbalancer.healthcheck.timeout=5s"
@@ -419,29 +419,19 @@ services:
 
 volumes:
   redis_master_data:
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/turbogate/redis-master
+    driver: local
   redis_replica_data:
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/turbogate/redis-replica
+    driver: local
 
 networks:
   turbogate_frontend:
-    driver: overlay
-    attachable: true
+    external: true
   turbogate_backend:
-    driver: overlay
-    attachable: true  
+    external: true  
   turbogate_database:
-    driver: overlay
-    attachable: true
+    external: true
   traefik_proxy:
-    driver: overlay
-    attachable: true
+    external: true
 
 configs:
   traefik_tls_config_v{{ resource_version }}:
