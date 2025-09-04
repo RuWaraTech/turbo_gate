@@ -172,8 +172,8 @@
 
     - name: Wait for services to stabilize after deployment
       ansible.builtin.pause:
-        seconds: 45
-
+        seconds: 120
+        prompt: "Waiting 90 seconds for services to finish their rolling update before cleanup..."
     # ===================================================================
     # BEGIN: CLEANUP OF OLD RESOURCES
     # ===================================================================
