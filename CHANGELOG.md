@@ -1,3 +1,9 @@
+## v1.4.4 (2025-09-04)
+
+### fix
+
+-  MODSEC_RULE_ENGINE setting to On as striing
+
 ## v1.4.3 (2025-09-04)
 
 ### fix
