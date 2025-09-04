@@ -1,3 +1,9 @@
+## v1.4.2 (2025-09-04)
+
+### fix
+
+- Resolve Docker Swarm deployment issues and Redis connectivity
+
 ## v1.4.1 (2025-09-04)
 
 ### fix
