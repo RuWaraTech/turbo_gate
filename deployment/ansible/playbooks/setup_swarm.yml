@@ -270,9 +270,9 @@
           role: "{{ 'manager' if 'swarm_managers' in group_names else 'worker' }}"
           app: "turbogate"
           environment: "production"
-          security_hardened: "{{ node_security_enabled | string }}"
+          security_hardened: "{{ node_security_enabled | string | lower }}"
           security_zone: "{{ 'dmz' if 'swarm_managers' in group_names else ('database' if ansible_hostname.endswith('-3') else 'internal') }}"
-          fail2ban_enabled: "{{ node_security_enabled | string }}"
+          fail2ban_enabled: "{{ node_security_enabled | string | lower }}"
           network_segment: "{{ 'management' if 'swarm_managers' in group_names else 'application' }}"
       delegate_to: "{{ groups['swarm_managers'][0] }}"
 

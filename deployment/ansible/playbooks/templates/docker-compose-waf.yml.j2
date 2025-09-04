@@ -2,12 +2,15 @@ version: '3.8'
 
 services:
   traefik:
-    image: traefik:v3.4
+    image: traefik:v3.1.1
     networks:
       - traefik_proxy
     ports:
       - target: 80
         published: 80
+        protocol: tcp
+      - target: 8080
+        published: 8080
         protocol: tcp
     configs:
       - source: traefik_tls_config_v{{ resource_version }}
@@ -388,12 +391,17 @@ services:
           memory: 64M
     entrypoint: ["/bin/sh", "-c"]
     command: |
+      echo "Waiting for redis-master to be available..."
+      while ! redis-cli -h redis-master -p 6379 -a "$$(cat /run/secrets/redis_password)" ping; do
+        sleep 1
+      done
+      echo "Redis-master is available. Starting sentinel."
       echo "port 26379
       sentinel monitor mymaster redis-master 6379 2
       sentinel auth-pass mymaster $$(cat /run/secrets/redis_password)
       sentinel down-after-milliseconds mymaster 5000
       sentinel failover-timeout mymaster 10000
-      sentinel parallel-syncs mymaster 1" > /tmp/sentinel.conf && 
+      sentinel parallel-syncs mymaster 1" > /tmp/sentinel.conf &&
       redis-sentinel /tmp/sentinel.conf
     user: "999:999"
     tmpfs:
