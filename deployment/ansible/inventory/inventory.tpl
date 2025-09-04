@@ -43,7 +43,6 @@ all:
     # Traefik + Coraza WAF configuration
     traefik_enabled: ${traefik_enabled}
     coraza_rule_engine: ${coraza_rule_engine}
-    coraza_paranoia_level: ${coraza_paranoia_level}
     traefik_dashboard_auth: ${traefik_dashboard_auth}
     rate_limit_average: ${rate_limit_average}
     rate_limit_burst: ${rate_limit_burst}

@@ -108,8 +108,7 @@ output "deployment_summary" {
     load_balancer      = var.enable_load_balancer ? "Enabled with SSL termination" : "Disabled"
     ssl_termination    = var.enable_load_balancer ? "Load Balancer" : "Backend servers"
     certificate_type   = var.ssl_certificate_type
-    traefik_waf_enabled = var.traefik_enabled ? "Yes (Coraza WAF)" : "No"
-    coraza_paranoia_level = var.traefik_enabled ? var.coraza_paranoia_level : "N/A"
+    traefik_waf_enabled = var.traefik_enabled ? "Yes " : "No"
     backend_protocol   = var.enable_load_balancer ? "HTTP" : "HTTPS"
     high_availability  = var.enable_load_balancer ? "Yes (${length(hcloud_server.worker) + 1} nodes)" : "No"
     server_type        = var.server_type
