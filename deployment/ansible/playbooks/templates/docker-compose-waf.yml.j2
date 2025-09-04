@@ -92,7 +92,7 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping-entrypoint=web"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/ping"]
       interval: 15s
       timeout: 5s
       retries: 3
