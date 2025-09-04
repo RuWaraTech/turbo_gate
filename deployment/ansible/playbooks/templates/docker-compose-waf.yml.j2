@@ -105,6 +105,7 @@ services:
       BACKEND: "http://turbogate_turbogate:5000"
       BACKEND_WS: "ws://turbogate_turbogate:5000"
       PORT: "8080"
+      SSL_ENABLED: "false"
       MODSEC_AUDIT_LOG: "/dev/stdout"
       MODSEC_AUDIT_LOG_FORMAT: "JSON"
       MODSEC_RULE_ENGINE: "{{ 'On' if modsec_rule_engine == 'true' or modsec_rule_engine == 'On' else 'Off' }}" 
