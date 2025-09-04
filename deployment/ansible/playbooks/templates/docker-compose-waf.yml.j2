@@ -122,7 +122,7 @@ services:
       replicas: {{ modsec_replicas | default(2) }}
       placement:
         constraints:
-          - node.role == worker
+          - node.role == manager
           - node.labels.security_zone == dmz
           - node.labels.security_hardened == true
       update_config:
