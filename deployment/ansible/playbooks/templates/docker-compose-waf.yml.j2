@@ -15,24 +15,25 @@ services:
         target: /dynamic/tls.yaml
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /opt/turbogate/certs:/certs:ro
     environment:
       - TRAEFIK_LOG_LEVEL=INFO
     command:
       # HTTP EntryPoint (receives traffic from Load Balancer)
       - "--entrypoints.web.address=:80"
-      # Remove HTTPS redirect since LB handles TLS termination
-      # Attach dynamic configuration file for middlewares
+      # CRITICAL: Health check and API configuration
+      - "--api=true"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--ping=true"
+      - "--ping.entrypoint=web"
+      # File provider for dynamic configuration
       - "--providers.file.filename=/dynamic/tls.yaml"
       - "--providers.file.watch=true"
-      # Enable the Docker Swarm provider
+      # Docker Swarm provider
       - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
       - "--providers.swarm.watch=true"
       - "--providers.swarm.exposedbydefault=false"
       - "--providers.swarm.network=turbogate_traefik_proxy"
-      # API & Dashboard
-      - "--api.dashboard=true"
-      - "--api.insecure=false"
       # Observability
       - "--log.level=INFO"
       - "--accesslog=true"
@@ -92,7 +93,7 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      test: ["CMD", "traefik", "healthcheck", "--ping", "--ping-entrypoint=web"]
       interval: 15s
       timeout: 5s
       retries: 3
