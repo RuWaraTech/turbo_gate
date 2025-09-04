@@ -102,8 +102,8 @@ services:
     image: owasp/modsecurity-crs:apache
     environment:
       PARANOIA: "{{ modsec_paranoia_level | default(1) }}"
-      BACKEND: "http://turbogate_turbogate:5000"
-      BACKEND_WS: "ws://turbogate_turbogate:5000"
+      BACKEND: "http://turbogate:5000"
+      BACKEND_WS: "ws://turbogate:5000"
       PORT: "8080"
       SSL_ENGINE: "off"
       MODSEC_AUDIT_LOG: "/dev/stdout"
