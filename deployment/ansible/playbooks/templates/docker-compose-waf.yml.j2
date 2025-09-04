@@ -233,9 +233,10 @@ services:
       - LOG_LEVEL=INFO
       - DOMAIN_NAME={{ domain_name }}
       - VERSION={{ version | default('unknown') }}
-      - REDIS_SENTINEL_HOSTS=redis-sentinel:26379
-      - REDIS_SENTINEL_SERVICE=mymaster
-      - REDIS_USE_SENTINEL=true
+      - REDIS_URL=redis://redis-master:6379/0
+      - REDIS_ENABLED=true
+      - SECRET_KEY_FILE=/run/secrets/SECRET_KEY
+      - REDIS_PASSWORD_FILE=/run/secrets/redis_password
     user: "1001:1001"
     tmpfs:
       - /tmp:uid=1001,gid=1001,mode=1777
@@ -430,11 +431,14 @@ volumes:
 
 networks:
   turbogate_frontend:
-    external: true
+    driver: overlay
+    attachable: true
   turbogate_backend:
-    external: true  
+    driver: overlay
+    attachable: true  
   turbogate_database:
-    external: true
+    driver: overlay
+    attachable: true
   traefik_proxy:
     driver: overlay
     attachable: true

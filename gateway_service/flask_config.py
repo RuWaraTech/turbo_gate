@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict
 
 
 @dataclass
@@ -18,8 +18,18 @@ class Config:
 
     def __init__(self):
         """Initialize configuration with validation."""
-        # Validate SECRET_KEY
-        secret_key = os.environ.get("SECRET_KEY")
+        # Validate SECRET_KEY - try file first, then environment variable
+        secret_key = None
+        secret_key_file = os.environ.get("SECRET_KEY_FILE")
+        if secret_key_file and os.path.exists(secret_key_file):
+            try:
+                with open(secret_key_file, 'r') as f:
+                    secret_key = f.read().strip()
+            except Exception as e:
+                raise ValueError(f"Could not read SECRET_KEY from file {secret_key_file}: {e}")
+        else:
+            secret_key = os.environ.get("SECRET_KEY")
+        
         if not secret_key:
             raise ValueError("No SECRET_KEY set for Flask application. Did you follow the setup instructions?")
         if len(secret_key) < 16:

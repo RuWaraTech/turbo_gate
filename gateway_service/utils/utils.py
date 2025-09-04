@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import time
 import uuid
@@ -7,7 +8,7 @@ from typing import Optional
 
 import redis
 import structlog
-from flask import current_app, g, request
+from flask import current_app, g
 
 
 def setup_logging() -> structlog.stdlib.BoundLogger:
@@ -43,7 +44,23 @@ def get_redis_client() -> Optional[redis.Redis]:
 
     if not hasattr(g, "redis_client"):
         try:
-            g.redis_client = redis.from_url(current_app.config["REDIS_URL"])
+            # Get Redis URL and password
+            redis_url = current_app.config["REDIS_URL"]
+            
+            # Try to read Redis password from file if available
+            redis_password = None
+            redis_password_file = os.environ.get("REDIS_PASSWORD_FILE")
+            if redis_password_file and os.path.exists(redis_password_file):
+                try:
+                    with open(redis_password_file, 'r') as f:
+                        redis_password = f.read().strip()
+                    # Update Redis URL with password
+                    if redis_password and "redis://" in redis_url and "@" not in redis_url:
+                        redis_url = redis_url.replace("redis://", f"redis://:{redis_password}@")
+                except Exception as e:
+                    current_app.logger.warning(f"Could not read Redis password from file: {e}")
+            
+            g.redis_client = redis.from_url(redis_url)
             # Test connection
             g.redis_client.ping()
         except Exception as e:

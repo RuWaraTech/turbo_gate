@@ -32,10 +32,10 @@ fi
 if [ -f "/run/secrets/redis_password" ]; then
     if [ -r "/run/secrets/redis_password" ]; then
         export REDIS_PASSWORD=$(cat /run/secrets/redis_password)
-        export REDIS_URL="redis://:${REDIS_PASSWORD}@redis:6379/0"
+        export REDIS_URL="redis://:${REDIS_PASSWORD}@redis-master:6379/0"
         echo "✅ REDIS_PASSWORD loaded and URL configured"
         # Don't print the actual password, just confirm it's set
-        echo "   REDIS_URL format: redis://:****@redis:6379/0"
+        echo "   REDIS_URL format: redis://:****@redis-master:6379/0"
     else
         echo "❌ redis_password file exists but is not readable by user $(whoami)"
         ls -la /run/secrets/redis_password
@@ -46,7 +46,7 @@ else
     # Check if REDIS_URL is already set in environment
     if [ -z "$REDIS_URL" ]; then
         echo "⚠️  No REDIS_URL in environment either, using default"
-        export REDIS_URL="redis://redis:6379/0"
+        export REDIS_URL="redis://redis-master:6379/0"
     else
         echo "ℹ️  Using REDIS_URL from environment"
     fi
