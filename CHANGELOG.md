@@ -1,3 +1,9 @@
+## v1.4.0 (2025-09-04)
+
+### feat
+
+- Replace NGINX WAF with Traefik + ModSecurity and implement Redis Sentinel HA
+
 ## v1.3.0 (2025-09-04)
 
 ### feat
