@@ -75,18 +75,8 @@ services:
           memory: 512M
       labels:
         - "traefik.enable=true"
-        # Dashboard router (HTTP since LB handles TLS)
-        - "traefik.http.routers.dashboard.rule=Host(`dashboard.{{ domain_name }}`)"
-        - "traefik.http.routers.dashboard.entrypoints=web"
-        - "traefik.http.routers.dashboard.service=api@internal"
-        - "traefik.http.routers.dashboard.middlewares=dashboard-auth@file"
-        # Health check router (bypass WAF)
-        - "traefik.http.routers.health.rule=PathPrefix(`/health`) || PathPrefix(`/lb-health`)"
-        - "traefik.http.routers.health.entrypoints=web"
-        - "traefik.http.routers.health.service=ping@internal"
-        - "traefik.http.routers.health.priority=100"
-        - "traefik.http.routers.health.middlewares=security-headers@file"
-        # Service hint
+        # Router configuration is handled by the dynamic file provider (tls.yaml)
+        # Service hint to tell Traefik its own API port:
         - "traefik.http.services.traefik.loadbalancer.server.port=8080"
     security_opt:
       - no-new-privileges:true
